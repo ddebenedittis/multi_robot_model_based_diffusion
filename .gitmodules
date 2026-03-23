@@ -1,0 +1,3 @@
+[submodule "mbd"]
+	path = mbd
+	url = https://github.com/ddebenedittis/model-based-diffusion.git
