@@ -1,19 +1,21 @@
 """Crane pendulum diffusion animation: visualize reverse diffusion steps."""
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
+import os
+
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-import os
 
 # Parameters
 l = 1
 dt = 0.01
 
 # Load states saved during reverse diffusion
-data = np.load("results/crane/crane_states_over_steps.npz", allow_pickle=True)
-states = np.asarray(data["states"])   # shape: (Nsteps, Nplot, H+1, 4)
+data = np.load("results/latest-crane/crane_states_over_steps.npz", allow_pickle=True)
+states = np.asarray(data["states"])  # shape: (Nsteps, Nplot, H+1, 4)
 Nsteps, Nplot, Hplus1, _ = states.shape
 
 # Precompute (x, y) of the suspended mass
@@ -30,7 +32,7 @@ for step in range(Nsteps):
 fig, ax = plt.subplots(figsize=(6, 4))
 ax.set_xlim(-2.5, 2.5)
 ax.set_ylim(-2.5, 2.5)
-ax.set_aspect('equal')
+ax.set_aspect("equal")
 ax.set_xlabel("x [m]")
 ax.set_ylabel("y [m]")
 
@@ -46,7 +48,7 @@ def init():
 
 
 def update(step):
-    title.set_text(f"Reverse diffusion step {step+1}/{Nsteps}")
+    title.set_text(f"Reverse diffusion step {step + 1}/{Nsteps}")
     step_trajs = all_trajs[step]
     for i in range(Nplot):
         lines[i].set_data(step_trajs[i, :, 0], step_trajs[i, :, 1])
@@ -55,7 +57,7 @@ def update(step):
 
 ani = FuncAnimation(fig, update, frames=Nsteps, init_func=init, interval=300, blit=False)
 
-out_dir = "results/crane"
+out_dir = "results/latest-crane"
 os.makedirs(out_dir, exist_ok=True)
 video_path = os.path.join(out_dir, "pendulum_diffusion_steps.mp4")
 ani.save(video_path, fps=3)

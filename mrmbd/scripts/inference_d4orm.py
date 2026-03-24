@@ -1,25 +1,27 @@
 import functools
 import os
+
 import jax
-from jax import numpy as jnp
-import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from dataclasses import dataclass
+import matplotlib.pyplot as plt
 import tyro
-from tqdm import tqdm
+from jax import numpy as jnp
 
 from mrmbd.envs import MultiCar2d
-from mrmbd.utils import rollout_multi_us
 from mrmbd.envs.multi_car import Args
+from mrmbd.utils import rollout_multi_us
 
 
 def run_diffusion_once(args: Args):
     """First phase of D4ORM: initial global reverse diffusion (Algorithm 1)."""
     rng = jax.random.PRNGKey(seed=args.seed)
-    env = MultiCar2d(n=args.n_robots, formation_shift=args.formation_shift,
-                     ECD=args.ECD, obstacles_enabled=args.obstacles_enabled)
+    env = MultiCar2d(
+        n=args.n_robots,
+        formation_shift=args.formation_shift,
+        ECD=args.ECD,
+        obstacles_enabled=args.obstacles_enabled,
+    )
 
-    Nx = env.observation_size
     Nu = env.action_size
     n = env.num_robots
 
@@ -85,7 +87,9 @@ def run_diffusion_once(args: Args):
     return U_0, xs
 
 
-def run_diffusion_local(args: Args, U_init: jnp.ndarray, trajectory_buffer: list, sample_buffer: list):
+def run_diffusion_local(
+    args: Args, U_init: jnp.ndarray, trajectory_buffer: list, sample_buffer: list
+):
     """Second phase of D4ORM: local iterative reverse diffusion optimization (Algorithm 2)."""
     rng = jax.random.PRNGKey(seed=args.seed + 123)
 
@@ -104,8 +108,8 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, trajectory_buffer: list
     trajectory_buffer = []
 
     # Local diffusion parameters
-    L = 10   # window length
-    K = 5    # number of local iterations
+    L = 10  # window length
+    K = 5  # number of local iterations
 
     betas_local = jnp.linspace(0.01, 0.2, 10)
     alphas_local = 1.0 - betas_local
@@ -163,21 +167,23 @@ def main():
     trajectory_buffer = [traj_0]
     sample_buffer = [None]
     print("STEP 2: Iterative Local Optimization with Visualization")
-    U_opt, trajectory_buffer, sample_buffer = run_diffusion_local(args, U_init, trajectory_buffer, sample_buffer)
+    U_opt, trajectory_buffer, sample_buffer = run_diffusion_local(
+        args, U_init, trajectory_buffer, sample_buffer
+    )
 
     if not args.not_render:
-        path = "results/multicar_iterative"
+        path = "results/latest-multicar"
         os.makedirs(path, exist_ok=True)
 
         fig, ax = plt.subplots(figsize=(5, 5))
-        cmap = plt.get_cmap('tab20', args.n_robots)
+        cmap = plt.get_cmap("tab20", args.n_robots)
 
         def init():
             ax.clear()
             ax.set_xlim(-3, 3)
             ax.set_ylim(-3, 3)
             ax.set_title("Local Diffusion Evolution")
-            ax.set_aspect('equal')
+            ax.set_aspect("equal")
             ax.grid(True)
             return []
 
@@ -195,19 +201,21 @@ def main():
             for i in range(args.n_robots):
                 traj = xs[i]
                 color = cmap(i)
-                ax.plot(traj[:, 0], traj[:, 1], '-', color=color)
-                ax.plot(traj[0, 0], traj[0, 1], 's', color=color, markersize=4)
-                ax.plot(traj[-1, 0], traj[-1, 1], '*', color=color, markersize=7)
+                ax.plot(traj[:, 0], traj[:, 1], "-", color=color)
+                ax.plot(traj[0, 0], traj[0, 1], "s", color=color, markersize=4)
+                ax.plot(traj[-1, 0], traj[-1, 1], "*", color=color, markersize=7)
 
             ax.set_xlim(-3, 3)
             ax.set_ylim(-3, 3)
             title = "Initial Trajectory" if frame_idx == 0 else f"Diffusion Step {frame_idx}"
             ax.set_title(title)
-            ax.set_aspect('equal')
+            ax.set_aspect("equal")
             ax.grid(True)
             return []
 
-        ani = animation.FuncAnimation(fig, update, frames=len(trajectory_buffer), init_func=init, blit=False)
+        ani = animation.FuncAnimation(
+            fig, update, frames=len(trajectory_buffer), init_func=init, blit=False
+        )
         ani.save(os.path.join(path, "local_diffusion_video.mp4"), fps=10, dpi=150)
         print("Saved: local_diffusion_video.mp4")
 

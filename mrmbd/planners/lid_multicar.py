@@ -1,20 +1,24 @@
 import functools
+import os
+import time
+
 import jax
+import matplotlib.animation as animation
+import matplotlib.pyplot as plt
+import numpy as np
+import tyro
 from jax import numpy as jnp
 
-import os
-from mrmbd.utils import rollout_multi_us, make_lagrangian_fn, make_residual_fn
-from mrmbd.utils import cosine_beta_schedule, cosine_beta_schedule_scaled
-from mrmbd.envs.multi_car import check_inter_robot_collisions, Args, check_collision_static
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+from mrmbd.butterworth import butterworth_filter_numpy, get_butterworth_coeffs
 from mrmbd.envs import MultiCar2d
-
-import tyro
-import numpy as np
-import time
-from mrmbd.butterworth import butterworth_filter_numpy, ar1_noise_numpy
-from mrmbd.butterworth import get_butterworth_coeffs
+from mrmbd.envs.multi_car import Args, check_collision_static, check_inter_robot_collisions
+from mrmbd.utils import (
+    cosine_beta_schedule,
+    create_experiment_dir,
+    make_lagrangian_fn,
+    make_residual_fn,
+    rollout_multi_us,
+)
 
 
 # === Plot actions for all robots (4 subplots) ===
@@ -47,27 +51,29 @@ def plot_all_robot_actions(U_opt, dt=0.1, path="results/multicar_iterative"):
     print(f"Saved {filename}")
 
 
-def plot_obstacle_layout(env):
+def plot_obstacle_layout(env, out_dir="results"):
     """
     Visualize only the initial robot positions and static obstacles,
     with clean academic style suitable for thesis figures.
     """
-    plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif": ["CMU Serif", "DejaVu Serif", "Times"],
-        "font.size": 10,
-        "axes.titlesize": 11,
-        "axes.labelsize": 10,
-        "legend.fontsize": 9,
-        "axes.linewidth": 0.8,
-        "xtick.direction": "in",
-        "ytick.direction": "in",
-        "xtick.major.size": 3,
-        "ytick.major.size": 3,
-    })
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["CMU Serif", "DejaVu Serif", "Times"],
+            "font.size": 10,
+            "axes.titlesize": 11,
+            "axes.labelsize": 10,
+            "legend.fontsize": 9,
+            "axes.linewidth": 0.8,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "xtick.major.size": 3,
+            "ytick.major.size": 3,
+        }
+    )
 
     fig, ax = plt.subplots(figsize=(4.2, 4.2))
-    ax.set_aspect('equal')
+    ax.set_aspect("equal")
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     ax.set_title("Environment with static obstacles", pad=6)
@@ -75,34 +81,55 @@ def plot_obstacle_layout(env):
     # === Static obstacles ===
     for x_c, y_c, w, h in env.static_obstacles:
         rect = plt.Rectangle(
-            (x_c - w / 2, y_c - h / 2), w, h,
-            linewidth=1.0, edgecolor='black',
-            facecolor='#d3d3d3', alpha=0.8, zorder=1
+            (x_c - w / 2, y_c - h / 2),
+            w,
+            h,
+            linewidth=1.0,
+            edgecolor="black",
+            facecolor="#d3d3d3",
+            alpha=0.8,
+            zorder=1,
         )
         ax.add_patch(rect)
 
     # === Initial robot positions ===
     for i, (x, y, _) in enumerate(env.x0):
-        ax.plot(x, y, 'o', color=f"C{i}", markersize=6,
-                markeredgecolor='k', markeredgewidth=0.6, zorder=3)
-        ax.text(x, y - 0.10, f"R{i}", ha='center', va='top', fontsize=8)
+        ax.plot(
+            x,
+            y,
+            "o",
+            color=f"C{i}",
+            markersize=6,
+            markeredgecolor="k",
+            markeredgewidth=0.6,
+            zorder=3,
+        )
+        ax.text(x, y - 0.10, f"R{i}", ha="center", va="top", fontsize=8)
 
     # === Goal positions ===
     for i, (xg, yg, _) in enumerate(env.xg):
-        ax.plot(xg, yg, 's', color=f"C{i}", markersize=5,
-                markeredgecolor='k', markeredgewidth=0.6, zorder=3)
+        ax.plot(
+            xg,
+            yg,
+            "s",
+            color=f"C{i}",
+            markersize=5,
+            markeredgecolor="k",
+            markeredgewidth=0.6,
+            zorder=3,
+        )
 
     # === Dashed grid ===
     ax.grid(True, linestyle="-", color="k", linewidth=0.6, alpha=0.7)
 
     # === Legend ===
-    ax.legend(["Obstacles"], loc='upper right', frameon=False)
+    ax.legend(["Obstacles"], loc="upper right", frameon=False)
 
     plt.tight_layout()
-    plt.savefig("results/obstacle_layout.pdf", dpi=300)
+    plt.savefig(os.path.join(out_dir, "obstacle_layout.pdf"), dpi=300)
 
 
-def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
+def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit, out_dir="results/multicar_iterative"):
     """
     First phase of D4ORM: initial global reverse diffusion
     inspired by Algorithm 1 (Model-Based Diffusion) from the D4ORM paper.
@@ -110,7 +137,6 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
     """
     rng = jax.random.PRNGKey(seed=args.seed)
 
-    Nx = env.observation_size
     Nu = env.action_size
     n = env.num_robots
 
@@ -146,14 +172,14 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
         if args.filter:
             eps_u = jax.random.normal(rng_eps, (args.Nsample, args.Hsample, n, Nu))
             eps_u_np = np.array(eps_u)
-            b, a = get_butterworth_coeffs(order=4, fc=2.0, fs=1/env.dt)
+            b, a = get_butterworth_coeffs(order=4, fc=2.0, fs=1 / env.dt)
             eps_u_filt_np = butterworth_filter_numpy(eps_u_np, b, a)
             eps_u = jnp.array(eps_u_filt_np)
         else:
             eps_u = jax.random.normal(rng_eps, (args.Nsample, args.Hsample, n, Nu))
 
         Y0s = eps_u * sigmas[i] + Ybar_i
-        if env.obstacles_enabled == False:
+        if not env.obstacles_enabled:
             Y0s = jnp.clip(Y0s, -1.0, 1.0)
         rewss, _ = jax.vmap(rollout_us, in_axes=(None, 0))(state_init, Y0s)
         rews = rewss.mean(axis=(1, 2))
@@ -191,17 +217,19 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
                 trajectories_samples.append(np.array(traj_samples[..., :2]))  # (Nsample, T+1, n, 2)
         if args.save_video:
             return Yi, Yi_list, Y0s_list, trajectories_denoised, trajectories_samples
-        else:
-            return Yi
+        return Yi
+
     if args.save_video:
         rng_exp, rng = jax.random.split(rng)
         U_0, Yi_list, Y0s_list, trajectories_denoised, trajectories_samples = reverse(YN, rng_exp)
         # Save everything
-        np.savez("results/multicar_iterative/global_Yi_list.npz",
-                Yi_list=Yi_list,
-                Y0s_list=Y0s_list,
-                trajectories_denoised=trajectories_denoised,
-                trajectories_samples=trajectories_samples)
+        np.savez(
+            os.path.join(out_dir, "global_Yi_list.npz"),
+            Yi_list=Yi_list,
+            Y0s_list=Y0s_list,
+            trajectories_denoised=trajectories_denoised,
+            trajectories_samples=trajectories_samples,
+        )
     else:
         rng_exp, rng = jax.random.split(rng)
         U_0 = reverse(YN, rng_exp)
@@ -217,13 +245,14 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
     for t in range(U_0.shape[0]):
         q_t = q_states[t]
         u_t = U_0[t]
-        _, r_terms = env.get_rewards(q_t, u_t)   # shape (n, 6)
+        _, r_terms = env.get_rewards(q_t, u_t)  # shape (n, 6)
         r_terms_all.append(r_terms)
 
     return U_0
 
+
 # Local iterative diffusion optimization
-def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_env_jit):
+def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_env_jit, out_dir="results/multicar_iterative"):
     """
     Second phase of D4ORM: local iterative reverse diffusion optimization.
     Based on Algorithm 2 (Iterative Denoising) from the D4ORM paper.
@@ -251,72 +280,83 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
     alphas_bar_local = jnp.cumprod(alphas)
     sigmas_local = jnp.sqrt(1 - alphas_bar_local)
 
-    if args.penalize_backward:
-        lambda_goal = jnp.zeros((n * 3))
-    else:
-        lambda_goal = jnp.zeros((n * 2))
+    lambda_goal = jnp.zeros(n * 3) if args.penalize_backward else jnp.zeros(n * 2)
 
-    def reverse_once_local_ECD(U_w, rng_w, lambda_goal, residual_fn, lagrangian, U_full, t_start, reset_env_jit, rollout_us):
+    def reverse_once_local_ECD(
+        U_w, rng_w, lambda_goal, residual_fn, lagrangian, U_full, t_start, reset_env_jit, rollout_us
+    ):
+        Nsample = args.Nsample
+        N_inner = 30  # number of ECD iterations
+        U_curr = U_w
+        lambda_curr = lambda_goal
+        delta_t = 0
 
-            Nsample = args.Nsample
-            N_inner = 30  # number of ECD iterations
-            U_curr = U_w
-            lambda_curr = lambda_goal
-            delta_t = 0
+        for i in range(N_inner):
+            rng_w, rng_step = jax.random.split(rng_w)
+            # Noise annealing: exponentially decaying, then set to 0 in last 2 steps
+            sigma_k = args.initial_sigma * jnp.exp(-args.noise_decay * i)
+            sigma_k = jnp.where(i >= N_inner - 2, 0.0, sigma_k)
+            mu_k = args.mu
 
-            for i in range(N_inner):
+            # Sample noisy control trajectories generated with gaussian noise
+            eps_u = jax.random.normal(rng_step, (Nsample, L, n, Nu))
+            noise = eps_u * sigma_k
+            Y0s = U_curr + noise
+            # note: clip must stay here
+            Y0s = jnp.clip(Y0s, -1.0, 1.0)
 
-                rng_w, rng_step = jax.random.split(rng_w)
-                # Noise annealing: exponentially decaying, then set to 0 in last 2 steps
-                sigma_k = args.initial_sigma * jnp.exp(-args.noise_decay * i)
-                sigma_k = jnp.where(i >= N_inner - 2, 0.0, sigma_k)
-                mu_k = args.mu
+            U_fulls = jnp.repeat(U_full[None, ...], Nsample, axis=0)
+            U_fulls = U_fulls.at[:, t_start : t_start + L, :, :].set(Y0s)
+            t1 = time.time()
+            state_init = reset_env_jit(rng_w)
 
-                # Sample noisy control trajectories generated with gaussian noise
-                eps_u = jax.random.normal(rng_step, (Nsample, L, n, Nu))
-                noise = eps_u * sigma_k
-                Y0s = U_curr + noise
-                # note: clip must stay here
-                Y0s = jnp.clip(Y0s, -1.0, 1.0)
+            rewss, pipeline_states = jax.vmap(rollout_us, in_axes=(None, 0))(state_init, U_fulls)
+            t2 = time.time()
+            delta_t += t2 - t1
+            pipeline_states_window = pipeline_states[:, t_start : t_start + L]
 
-                U_fulls = jnp.repeat(U_full[None, ...], Nsample, axis=0)
-                U_fulls = U_fulls.at[:, t_start:t_start + L, :, :].set(Y0s)
-                t1 = time.time()
-                state_init = reset_env_jit(rng_w)
-                state_init = reset_env_jit(rng_w)
+            # Compute Lagrangian values for each sample
+            (
+                L_cost,
+                L_constraint,
+                L_vals,
+                control_cost,
+                barrier_cost,
+                goal_cost,
+                h_flat,
+                obstacle_cost_global,
+                orient_cost_global,
+                reverse_penalty_global,
+            ) = lagrangian(
+                Y0s, U_fulls, pipeline_states, pipeline_states_window, lambda_curr, args.mu
+            )
 
-                rewss, pipeline_states = jax.vmap(rollout_us, in_axes=(None, 0))(state_init, U_fulls)
-                t2 = time.time()
-                delta_t += t2 - t1
-                pipeline_states_window = pipeline_states[:, t_start:t_start+L]
+            # Estimate gradient using score function estimator
+            grad = jnp.einsum("s,slij->lij", L_vals - L_vals.mean(), noise)
+            grad = grad / (Nsample * sigma_k**2 + 1e-8)  # gradient direction
 
-                # Compute Lagrangian values for each sample
-                L_cost, L_constraint, L_vals, control_cost, barrier_cost, goal_cost, h_flat, obstacle_cost_global, orient_cost_global, reverse_penalty_global = lagrangian(Y0s, U_fulls, pipeline_states, pipeline_states_window, lambda_curr, args.mu)
+            rng_key, rng_noise = jax.random.split(rng_w)
+            xi = jax.random.normal(rng_noise, U_curr.shape)
+            sigma_langevin = sigma_k * jnp.sqrt(2 * args.alpha)
+            noise_term = sigma_langevin * xi
 
-                # Estimate gradient using score function estimator
-                grad = jnp.einsum("s,slij->lij", L_vals - L_vals.mean(), noise)
-                grad = grad / (Nsample * sigma_k ** 2 + 1e-8)  # gradient direction
+            U_next = U_curr - args.alpha * grad + noise_term
+            U_next = jnp.clip(U_next, -1.0, 1.0)
 
-                rng_key, rng_noise = jax.random.split(rng_w)
-                xi = jax.random.normal(rng_noise, U_curr.shape)
-                sigma_langevin = sigma_k * jnp.sqrt(2 * args.alpha)
-                noise_term = sigma_langevin * xi
+            # Update Lagrange multipliers based on average residual
+            h_goal = residual_fn(pipeline_states)
+            h_mean = jnp.mean(h_goal, axis=0).reshape(-1)
+            lambda_next = lambda_curr + args.alpha * mu_k * h_mean
 
-                U_next = U_curr - args.alpha * grad + noise_term
-                U_next = jnp.clip(U_next, -1.0, 1.0)
-
-                # Update Lagrange multipliers based on average residual
-                h_goal = residual_fn(pipeline_states)
-                h_mean = jnp.mean(h_goal, axis=0).reshape(-1)
-                lambda_next = lambda_curr + args.alpha * mu_k * h_mean
-
-                U_curr = U_next
-                lambda_curr = lambda_next
-            return U_curr, lambda_curr
+            U_curr = U_next
+            lambda_curr = lambda_next
+        return U_curr, lambda_curr
 
     if args.ECD:
         state_init_for_goal = reset_env_jit(jax.random.PRNGKey(args.seed + 777))
-        residual_fn = make_residual_fn(env.penalize_backward, state_init_for_goal, env, args.Nsample)
+        residual_fn = make_residual_fn(
+            env.penalize_backward, state_init_for_goal, env, args.Nsample
+        )
         lagrangian = make_lagrangian_fn(state_init_for_goal, env, args.Nsample)
         print("Final ECD")
 
@@ -326,7 +366,17 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
                 t_end = t_start + L
                 U_window = U[t_start:t_end]
                 rng, rng_step = jax.random.split(rng)
-                U_opt_local, lambda_goal = reverse_once_local_ECD(U_window, rng, lambda_goal, residual_fn, lagrangian, U, t_start, reset_env_jit, rollout_us)
+                U_opt_local, lambda_goal = reverse_once_local_ECD(
+                    U_window,
+                    rng,
+                    lambda_goal,
+                    residual_fn,
+                    lagrangian,
+                    U,
+                    t_start,
+                    reset_env_jit,
+                    rollout_us,
+                )
                 U = U.at[t_start:t_end].set(U_opt_local)
 
             state_init_eval = reset_env_jit(jax.random.PRNGKey(args.seed))
@@ -336,77 +386,93 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
             reward_array_str = "[" + ", ".join(f"{r:.4f}" for r in reward_per_robot) + "]"
             print(f"[Iteration {i}] robots average rewards: {reward_array_str}")
     else:
-            for k in range(K):
-                for t_start in range(0, H - L + 1, L // 2):  # sliding overlapping windows
-                    t_end = t_start + L
-                    U_window = U[t_start:t_end]
+        for k in range(K):
+            for t_start in range(0, H - L + 1, L // 2):  # sliding overlapping windows
+                t_end = t_start + L
+                U_window = U[t_start:t_end]
 
-                    rng, rng_step = jax.random.split(rng)
+                rng, rng_step = jax.random.split(rng)
 
-                    # Local reverse diffusion inside the window
-                    def reverse_once_local(U_w, rng_w):
-                        for j in reversed(range(1, L)):
-                            eps_u = jax.random.normal(rng_w, (args.Nsample, L, n, Nu))
-                            sigma_local = sigmas_local[j]
-                            Y0s = eps_u * sigma_local + U_w
-                            if env.obstacles_enabled == False:
-                                 Y0s = jnp.clip(Y0s, -1.0, 1.0)
+                # Local reverse diffusion inside the window
+                def reverse_once_local(U_w, rng_w):
+                    for j in reversed(range(1, L)):
+                        eps_u = jax.random.normal(rng_w, (args.Nsample, L, n, Nu))
+                        sigma_local = sigmas_local[j]
+                        Y0s = eps_u * sigma_local + U_w
+                        if not env.obstacles_enabled:
+                            Y0s = jnp.clip(Y0s, -1.0, 1.0)
 
-                            # Insert modified window into full control sequences
-                            U_fulls = jnp.repeat(U[None, ...], args.Nsample, axis=0)
-                            U_fulls = U_fulls.at[:, t_start:t_end, :, :].set(Y0s)
-                            # Evaluate new rollouts
-                            state_init = reset_env_jit(rng_step)
-                            rewss, traj_samples = jax.vmap(rollout_us, in_axes=(None, 0))(state_init, U_fulls)
-                            rews = rewss.mean(axis=(1, 2))
+                        # Insert modified window into full control sequences
+                        U_fulls = jnp.repeat(U[None, ...], args.Nsample, axis=0)
+                        U_fulls = U_fulls.at[:, t_start:t_end, :, :].set(Y0s)
+                        # Evaluate new rollouts
+                        state_init = reset_env_jit(rng_step)
+                        rewss, traj_samples = jax.vmap(rollout_us, in_axes=(None, 0))(
+                            state_init, U_fulls
+                        )
+                        rews = rewss.mean(axis=(1, 2))
 
-                            # Compute weighted average of samples
-                            logp0 = (rews - rews.mean()) / (rews.std() + 1e-6) / args.temp_sample
-                            weights = jax.nn.softmax(logp0)
-                            U_opt = jnp.einsum("s,slij->lij", weights, Y0s)
-                            # Final evaluation
-                            U_new = jnp.sqrt(alphas_bar_local[j - 1]) * U_opt
+                        # Compute weighted average of samples
+                        logp0 = (rews - rews.mean()) / (rews.std() + 1e-6) / args.temp_sample
+                        weights = jax.nn.softmax(logp0)
+                        U_opt = jnp.einsum("s,slij->lij", weights, Y0s)
+                        # Final evaluation
+                        U_new = jnp.sqrt(alphas_bar_local[j - 1]) * U_opt
 
-                        return U_new
+                    return U_new
 
-                    U_opt_local = reverse_once_local(U_window, rng_step)
-                    U = U.at[t_start:t_end].set(U_opt_local)
+                U_opt_local = reverse_once_local(U_window, rng_step)
+                U = U.at[t_start:t_end].set(U_opt_local)
 
-                state_init_eval = reset_env_jit(jax.random.PRNGKey(args.seed + 1024))
+            state_init_eval = reset_env_jit(jax.random.PRNGKey(args.seed + 1024))
 
-                rewss_eval, _ = rollout_us(state_init_eval, U)
+            rewss_eval, _ = rollout_us(state_init_eval, U)
 
-                reward_per_robot = rewss_eval.mean(axis=0)
-                rewards_per_iter.append(np.array(reward_per_robot))
-                reward_array_str = "[" + ", ".join(f"{r:.4f}" for r in reward_per_robot) + "]"
-                print(f"[Iteration {k}] robots average rewards: {reward_array_str}")
+            reward_per_robot = rewss_eval.mean(axis=0)
+            rewards_per_iter.append(np.array(reward_per_robot))
+            reward_array_str = "[" + ", ".join(f"{r:.4f}" for r in reward_per_robot) + "]"
+            print(f"[Iteration {k}] robots average rewards: {reward_array_str}")
     if args.save_video:
-        np.savez("results/multicar_iterative/local_Yi_list.npz",
-                 trajectories_denoised=trajectories_denoised_local,
-                 trajectories_samples=trajectories_samples_local)
+        np.savez(
+            os.path.join(out_dir, "local_Yi_list.npz"),
+            trajectories_denoised=trajectories_denoised_local,
+            trajectories_samples=trajectories_samples_local,
+        )
 
     return U, rewards_per_iter
+
 
 def main():
     args = tyro.cli(Args)
 
+    variant_tags = ["LIDEC"] if args.ECD else ["LID"]
+    if args.formation_shift:
+        variant_tags.append("form")
+    out_dir = create_experiment_dir("multicar", args, variant_tags)
+
     total_start = time.time()
 
     print("STEP 1: Initial Reverse Diffusion")
-    env = MultiCar2d(n=args.n_robots, formation_shift=args.formation_shift, ECD=args.ECD, obstacles_enabled=args.obstacles_enabled, penalize_backward=args.penalize_backward)
+    env = MultiCar2d(
+        n=args.n_robots,
+        formation_shift=args.formation_shift,
+        ECD=args.ECD,
+        obstacles_enabled=args.obstacles_enabled,
+        penalize_backward=args.penalize_backward,
+    )
 
     step_env_jit = jax.jit(env.step)
     reset_env_jit = jax.jit(env.reset)
     rollout_us = jax.jit(functools.partial(rollout_multi_us, step_env_jit))
 
     t1 = time.time()
-    U_init = run_diffusion_once(args, env, rollout_us, reset_env_jit)
+    U_init = run_diffusion_once(args, env, rollout_us, reset_env_jit, out_dir=out_dir)
     t2 = time.time()
     print(f"Initial reverse diffusion time: {t2 - t1:.3f} s")
 
     print("STEP 2: Iterative Local Optimization")
     t3 = time.time()
-    U_opt, rewards_per_iter = run_diffusion_local(args, U_init, env, rollout_us, reset_env_jit)
+    U_opt, rewards_per_iter = run_diffusion_local(args, U_init, env, rollout_us, reset_env_jit, out_dir=out_dir)
     t4 = time.time()
     print(f"Local optimization time: {t4 - t3:.3f} s")
 
@@ -442,7 +508,9 @@ def main():
     print(f"Mean distance to goal: {errors.mean():.4f} m\n")
 
     # Interpolate trajectory
-    def interpolate_trajectory_jax(xs: jnp.ndarray, dt_original: float = 0.1, dt_interp: float = 0.01):
+    def interpolate_trajectory_jax(
+        xs: jnp.ndarray, dt_original: float = 0.1, dt_interp: float = 0.01
+    ):
         n, T, d = xs.shape
         t_max = (T - 1) * dt_original
         t_interp = jnp.arange(0.0, t_max + dt_interp, dt_interp)
@@ -465,8 +533,9 @@ def main():
         xs_interp = jax.vmap(interp_single_robot)(xs)
         return xs_interp, t_interp
 
-
-    def plot_and_save_reward_terms(r_terms_all, path, prefix="reward", robot_ids=None, component_names=None):
+    def plot_and_save_reward_terms(
+        r_terms_all, path, prefix="reward", robot_ids=None, component_names=None
+    ):
         """
         Plot and save reward components for each robot over time.
 
@@ -479,7 +548,6 @@ def main():
         """
         os.makedirs(path, exist_ok=True)
         n, T_plus_1, num_terms = r_terms_all.shape
-        T = T_plus_1 - 1
 
         if robot_ids is None:
             robot_ids = list(range(n))
@@ -501,7 +569,7 @@ def main():
             plt.close()
 
     if not args.not_render:
-        path = "results/multicar_iterative"
+        path = out_dir
         os.makedirs(path, exist_ok=True)
 
         state_init = reset_env_jit(jax.random.PRNGKey(args.seed + 1024))
@@ -521,7 +589,7 @@ def main():
         x_init = jnp.transpose(x_init, (1, 0, 2))
         r_terms_all = jnp.stack(r_terms_all, axis=1)  # shape (n, T, 6)
         # Save final trajectory plot
-        r_total_from_terms = r_terms_all[:, :, -1]         # shape (n, T)
+        r_total_from_terms = r_terms_all[:, :, -1]  # shape (n, T)
         r_total_mean = r_total_from_terms.mean(axis=-1)
         print("From get_rewards:", r_total_mean)
 
@@ -543,7 +611,7 @@ def main():
         r_terms_all_local = jnp.transpose(r_terms_all_local, (1, 0, 2))  # (n, T+1, 6)
 
         fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-        ax.set_aspect('equal', adjustable='datalim')
+        ax.set_aspect("equal", adjustable="datalim")
 
         env.render(ax, xs, goals=env.xg, actions=U_opt)
 
@@ -552,7 +620,7 @@ def main():
 
         # === Second figure: env.render only ===
         fig2, ax2 = plt.subplots(1, 1, figsize=(5, 5))
-        ax2.set_aspect('equal', adjustable='datalim')
+        ax2.set_aspect("equal", adjustable="datalim")
         env.render(ax2, xs, goals=env.xg, actions=U_opt)
         plt.title(f"local reverse diffusion-{ecd_tag}{formation_tag}")
         plt.tight_layout()
@@ -561,24 +629,48 @@ def main():
 
         # ================== FIGURE A: GLOBAL REVERSE DIFFUSION ONLY ================== #
         fig_g, ax_g = plt.subplots(1, 1, figsize=(5, 5))
-        ax_g.set_aspect('equal', adjustable='datalim')
+        ax_g.set_aspect("equal", adjustable="datalim")
         # Use env.render with X = x_init and, optionally, global actions U_init
         env.render(ax_g, x_init, goals=env.xg, actions=U_init, style="flow")
-        ax_g.set_title(f"Global reverse diffusion")
+        ax_g.set_title("Global reverse diffusion")
         plt.tight_layout()
-        plt.savefig(os.path.join(path, f"global_diffusion.pdf"))
+        plt.savefig(os.path.join(path, "global_diffusion.pdf"))
         print(f"Global figure saved in {path}/global_diffusion.pdf")
 
         output_dir_local = os.path.join(path, "reward_local")
         output_dir_global = os.path.join(path, "reward_global")
-        component_names = ["r_goal", "r_safe", "r_form", "r_control", "r_obs", "r_backward", "r_total"]
-        plot_and_save_reward_terms(r_terms_all_local, path=output_dir_local, prefix=f"reward_plot_{ecd_tag}_{formation_tag}", component_names=component_names)
-        plot_and_save_reward_terms(r_terms_all_global, path=output_dir_global, prefix=f"globalreward_plot_{ecd_tag}_{formation_tag}", component_names=component_names)
+        component_names = [
+            "r_goal",
+            "r_safe",
+            "r_form",
+            "r_control",
+            "r_obs",
+            "r_backward",
+            "r_total",
+        ]
+        plot_and_save_reward_terms(
+            r_terms_all_local,
+            path=output_dir_local,
+            prefix=f"reward_plot_{ecd_tag}_{formation_tag}",
+            component_names=component_names,
+        )
+        plot_and_save_reward_terms(
+            r_terms_all_global,
+            path=output_dir_global,
+            prefix=f"globalreward_plot_{ecd_tag}_{formation_tag}",
+            component_names=component_names,
+        )
 
         # Save trajectory data and optimized control
-        np.savez(f"results/multicar_iterative/optimized_data_{ecd_tag}_{formation_tag}.npz", U_opt=np.array(U_opt), traj=np.array(traj), goals=np.array(env.xg), rewards=np.array(rewards_per_iter))
+        np.savez(
+            os.path.join(path, f"optimized_data_{ecd_tag}_{formation_tag}.npz"),
+            U_opt=np.array(U_opt),
+            traj=np.array(traj),
+            goals=np.array(env.xg),
+            rewards=np.array(rewards_per_iter),
+        )
 
-        plot_all_robot_actions(U_opt)
+        plot_all_robot_actions(U_opt, path=path)
 
         # Create video
 
@@ -591,13 +683,13 @@ def main():
             xs_np = jnp.array(xs)
 
         n, T, _ = xs_np.shape
-        cmap = plt.get_cmap('tab20', n)
+        cmap = plt.get_cmap("tab20", n)
         actions = jnp.transpose(U_opt, (1, 0, 2))  # (n, T, Nu)
 
         fig, ax = plt.subplots(figsize=(5, 5))
-        ax.set_aspect('equal', adjustable='box')
+        ax.set_aspect("equal", adjustable="box")
 
-        lines = [ax.plot([], [], 'o', label=f"Robot {i}")[0] for i in range(n)]
+        lines = [ax.plot([], [], "o", label=f"Robot {i}")[0] for i in range(n)]
         goals = env.xg if hasattr(env, "xg") else None
 
         # Compute bounding box
@@ -616,10 +708,14 @@ def main():
 
         if args.formation_shift:
             c0 = env.x0[:, :2].mean(axis=0)
-            circle0 = plt.Circle((c0[0], c0[1]), env.radius, color='gray', linestyle='--', fill=False)
+            circle0 = plt.Circle(
+                (c0[0], c0[1]), env.radius, color="gray", linestyle="--", fill=False
+            )
             ax.add_patch(circle0)
             cg = env.xg[:, :2].mean(axis=0)
-            circleg = plt.Circle((cg[0], cg[1]), env.radius, color='black', linestyle='--', fill=False)
+            circleg = plt.Circle(
+                (cg[0], cg[1]), env.radius, color="black", linestyle="--", fill=False
+            )
             ax.add_patch(circleg)
 
         ax.legend()
@@ -635,15 +731,16 @@ def main():
 
         for i in range(n):
             color = cmap(i)
-            line, = ax.plot([], [], lw=2, color=color, zorder=1)
+            (line,) = ax.plot([], [], lw=2, color=color, zorder=1)
             lines.append(line)
 
             if goals is not None:
-                    gx, gy = goals[i, 0], goals[i, 1]
-                    ax.plot(gx, gy, 's', color=color, markersize=6, markeredgewidth=2)
+                gx, gy = goals[i, 0], goals[i, 1]
+                ax.plot(gx, gy, "s", color=color, markersize=6, markeredgewidth=2)
 
         orientation_arrows = []
         robot_circles = []
+
         def update(frame):
             # Remove previous arrows
             for arr in orientation_arrows:
@@ -654,15 +751,23 @@ def main():
                 c.remove()
             robot_circles.clear()
             for i in range(n):
-                x_trail = xs_np[i, :frame + 1, 0]
-                y_trail = xs_np[i, :frame + 1, 1]
+                x_trail = xs_np[i, : frame + 1, 0]
+                y_trail = xs_np[i, : frame + 1, 1]
                 lines[i].set_data(x_trail, y_trail)
 
                 x_curr = xs_np[i, frame, 0]
                 y_curr = xs_np[i, frame, 1]
                 theta_curr = xs_np[i, frame, 2]
 
-                circle = plt.Circle((x_curr, y_curr), 0.1, color=cmap(i), fill=False, linestyle='-', linewidth=1, zorder=3)
+                circle = plt.Circle(
+                    (x_curr, y_curr),
+                    0.1,
+                    color=cmap(i),
+                    fill=False,
+                    linestyle="-",
+                    linewidth=1,
+                    zorder=3,
+                )
                 ax.add_patch(circle)
                 robot_circles.append(circle)
 
@@ -670,9 +775,18 @@ def main():
                 dy = 0.3 * np.sin(theta_curr)
 
                 v_curr = actions[i, frame, 1]
-                color_arrow = 'green' if v_curr >= -0.05 else 'red'
+                color_arrow = "green" if v_curr >= -0.05 else "red"
 
-                arrow = ax.arrow(x_curr, y_curr, dx, dy, head_width=0.1, head_length=0.15, fc=color_arrow, ec=color_arrow)
+                arrow = ax.arrow(
+                    x_curr,
+                    y_curr,
+                    dx,
+                    dy,
+                    head_width=0.1,
+                    head_length=0.15,
+                    fc=color_arrow,
+                    ec=color_arrow,
+                )
 
                 orientation_arrows.append(arrow)
 
@@ -691,9 +805,9 @@ def main():
                 w + 2 * buffer_max,
                 h + 2 * buffer_max,
                 linewidth=0,
-                facecolor='yellow',
+                facecolor="yellow",
                 alpha=0.1,
-                zorder=1
+                zorder=1,
             )
             ax.add_patch(rect_outer)
 
@@ -703,31 +817,31 @@ def main():
                 w + 2 * buffer_min,
                 h + 2 * buffer_min,
                 linewidth=0,
-                facecolor='yellow',
+                facecolor="yellow",
                 alpha=0.5,
-                zorder=2
+                zorder=2,
             )
             ax.add_patch(rect_inner)
 
         for x_c, y_c, w, h in env.static_obstacles:
             rect_real = plt.Rectangle(
                 (x_c - w / 2, y_c - h / 2),
-                w, h,
+                w,
+                h,
                 linewidth=1,
-                edgecolor='red',
-                facecolor='red',
-                zorder=3
+                edgecolor="red",
+                facecolor="red",
+                zorder=3,
             )
             ax.add_patch(rect_real)
 
-        ax.legend(points, labels, loc='upper right')
+        ax.legend(points, labels, loc="upper right")
 
-        plot_obstacle_layout(env)
+        plot_obstacle_layout(env, out_dir=path)
 
         video_path = os.path.join(path, f"local_diffusion_{ecd_tag}_{formation_tag}.mp4")
         ani.save(video_path, fps=10, dpi=150)
         print("Video saved in:", video_path)
-
 
 
 if __name__ == "__main__":

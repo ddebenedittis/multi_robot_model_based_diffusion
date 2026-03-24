@@ -1,9 +1,9 @@
 # Noise generation and filtering utilities for diffusion planners
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 from scipy.signal import butter, lfilter
-import jax.numpy as jnp
-import jax
 
 
 def ar1_noise(eta, rho=0.9):
@@ -16,6 +16,7 @@ def ar1_noise(eta, rho=0.9):
     Returns:
         Correlated noise, same shape as eta
     """
+
     def step(eps_prev, eta_t):
         return (
             rho * eps_prev + jnp.sqrt(1 - rho**2) * eta_t,
@@ -64,7 +65,7 @@ def get_butterworth_coeffs(order: int, fc: float, fs: float):
         b, a: filter coefficients
     """
     Wn = fc / (fs / 2)  # normalize [0,1], where 1 = Nyquist
-    b, a = butter(order, Wn, btype='low')
+    b, a = butter(order, Wn, btype="low")
     return b, a
 
 

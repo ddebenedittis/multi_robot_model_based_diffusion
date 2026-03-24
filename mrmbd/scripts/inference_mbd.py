@@ -1,12 +1,12 @@
 import functools
 import os
+
 import jax
-from jax import numpy as jnp
-from dataclasses import dataclass
-import tyro
-from tqdm import tqdm
-from matplotlib import pyplot as plt
 import matplotlib.animation as animation
+import tyro
+from jax import numpy as jnp
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 import mrmbd
 from mrmbd.envs import MultiCar2d
@@ -17,7 +17,6 @@ def run_diffusion(args: Args):
     rng = jax.random.PRNGKey(seed=args.seed)
     env = MultiCar2d(n=args.n_robots)
 
-    Nx = env.observation_size
     Nu = env.action_size
     n = env.num_robots
 
@@ -33,9 +32,7 @@ def run_diffusion(args: Args):
     alphas = 1.0 - betas
     alphas_bar = jnp.cumprod(alphas)
     sigmas = jnp.sqrt(1 - alphas_bar)
-    Sigmas_cond = (
-        (1 - alphas) * (1 - jnp.sqrt(jnp.roll(alphas_bar, 1))) / (1 - alphas_bar)
-    )
+    Sigmas_cond = (1 - alphas) * (1 - jnp.sqrt(jnp.roll(alphas_bar, 1))) / (1 - alphas_bar)
     sigmas_cond = jnp.sqrt(Sigmas_cond)
     sigmas_cond = sigmas_cond.at[0].set(0.0)
 
@@ -100,18 +97,18 @@ def run_diffusion(args: Args):
     Yi = reverse(YN, rng_exp)
 
     if not args.not_render:
-        path = "results/multicar"
+        path = "results/latest-multicar"
         os.makedirs(path, exist_ok=True)
 
         fig, ax = plt.subplots(figsize=(5, 5))
-        cmap = plt.get_cmap('tab20', n)
+        cmap = plt.get_cmap("tab20", n)
 
         def init():
             ax.clear()
             ax.set_xlim(-3, 3)
             ax.set_ylim(-3, 3)
             ax.set_title("Diffusion Evolution")
-            ax.set_aspect('equal')
+            ax.set_aspect("equal")
             ax.grid(True)
             return []
 
@@ -130,17 +127,19 @@ def run_diffusion(args: Args):
             for i in range(n):
                 traj = xs[i]
                 color = cmap(i)
-                ax.plot(traj[:, 0], traj[:, 1], '-', color=color)
-                ax.plot(traj[0, 0], traj[0, 1], 's', color=color, markersize=4)
-                ax.plot(traj[-1, 0], traj[-1, 1], '*', color=color, markersize=7)
+                ax.plot(traj[:, 0], traj[:, 1], "-", color=color)
+                ax.plot(traj[0, 0], traj[0, 1], "s", color=color, markersize=4)
+                ax.plot(traj[-1, 0], traj[-1, 1], "*", color=color, markersize=7)
             ax.set_xlim(-3, 3)
             ax.set_ylim(-3, 3)
             ax.set_title(f"Diffusion Step {frame_idx}")
-            ax.set_aspect('equal')
+            ax.set_aspect("equal")
             ax.grid(True)
             return []
 
-        ani = animation.FuncAnimation(fig, update, frames=len(trajectory_buffer), init_func=init, blit=False)
+        ani = animation.FuncAnimation(
+            fig, update, frames=len(trajectory_buffer), init_func=init, blit=False
+        )
         ani.save(os.path.join(path, "diffusion_video.mp4"), fps=10, dpi=150)
         print("Saved: diffusion_video.mp4")
 
@@ -152,4 +151,4 @@ def run_diffusion(args: Args):
 
 if __name__ == "__main__":
     final_trajectory, final_reward = run_diffusion(args=tyro.cli(Args))
-    print(f"Final reward for each robot: ", final_reward)
+    print("Final reward for each robot: ", final_reward)

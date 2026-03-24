@@ -1,16 +1,24 @@
-from functools import partial
-import jax
-import jax.numpy as jnp
-import numpy as np
-import time
 import os
-import matplotlib.pyplot as plt
-import tyro
-import jax.debug
-from mrmbd.envs.class_manipulator import RRPRSingleEnv, Args, rollout_single_us, forward_kinematics_rrpr_jax
-from mrmbd.utils import cosine_beta_schedule
+import time
+from functools import partial
 
-def compute_metrics(env, x_traj, tau_seq, rewards, goal_xyz, tag=""):
+import jax
+import jax.debug
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import numpy as np
+import tyro
+
+from mrmbd.envs.class_manipulator import (
+    Args,
+    RRPRSingleEnv,
+    forward_kinematics_rrpr_jax,
+    rollout_single_us,
+)
+from mrmbd.utils import create_experiment_dir
+
+
+def compute_metrics(env, x_traj, tau_seq, rewards, goal_xyz, tag="", out_dir="results/manipulator"):
     # States and torques
     x_np = np.array(x_traj)
     tau_np = np.array(tau_seq)
@@ -20,7 +28,7 @@ def compute_metrics(env, x_traj, tau_seq, rewards, goal_xyz, tag=""):
     qf = np.array(env.qf[:4])
     joint_err = q - qf
     rmse_joints = np.sqrt(np.mean(joint_err**2, axis=0))
-    mae_joints  = np.mean(np.abs(joint_err), axis=0)
+    mae_joints = np.mean(np.abs(joint_err), axis=0)
     maxerr_joints = np.max(np.abs(joint_err), axis=0)
 
     # === End-effector trajectory ===
@@ -30,18 +38,18 @@ def compute_metrics(env, x_traj, tau_seq, rewards, goal_xyz, tag=""):
             qt, env.L1_num, env.L2_num, env.L3_num, env.L4_num, env.D2_num
         )
         ee_traj.append(np.array(T_curr[:3, 3]))
-    ee_traj = np.array(ee_traj)   # (T, 3)
+    ee_traj = np.array(ee_traj)  # (T, 3)
 
     # End-effector errors
-    ee_err = ee_traj - goal_xyz   # (T, 3)
+    ee_err = ee_traj - goal_xyz  # (T, 3)
     rmse_ee = np.sqrt(np.mean(ee_err**2, axis=0))
-    mae_ee  = np.mean(np.abs(ee_err), axis=0)
+    mae_ee = np.mean(np.abs(ee_err), axis=0)
     final_ee_error = ee_err[-1]
-    final_ee_norm  = np.linalg.norm(final_ee_error)
+    final_ee_norm = np.linalg.norm(final_ee_error)
 
     # === Control effort (actual torques) ===
     tau_scaled = tau_np * np.array(env.ACTION_SCALE)
-    energy_control = np.sum(np.linalg.norm(tau_scaled, axis=1)**2) * env.dt
+    energy_control = np.sum(np.linalg.norm(tau_scaled, axis=1) ** 2) * env.dt
     peak_tau = np.max(np.abs(tau_scaled))
 
     # === Settling time (last entry above 5% of initial EE error) ===
@@ -77,22 +85,21 @@ def compute_metrics(env, x_traj, tau_seq, rewards, goal_xyz, tag=""):
     }
 
     # Save to file
-    os.makedirs("results/manipulator", exist_ok=True)
-    with open(f"results/manipulator/metrics_{tag}.txt", "w") as f:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"metrics_{tag}.txt"), "w") as f:
         for k, v in metrics.items():
             f.write(f"{k}: {v}\n")
 
     return metrics
 
 
-def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
+def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit, out_dir="results"):
     rng = jax.random.PRNGKey(seed=args.seed)
 
-    Nx = env.observation_size
     Nu = env.action_size
 
     rng, rng_reset = jax.random.split(rng)
-    state_init = reset_env_jit(rng_reset)
+    reset_env_jit(rng_reset)
 
     # Diffusion noise schedule
     betas = jnp.linspace(args.beta0, args.betaT, args.Ndiffuse)
@@ -101,7 +108,6 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
     alphas_bar = jnp.cumprod(alphas)
     sigmas = jnp.sqrt(1 - alphas_bar)
 
-    Y0s_list = []
     states_xyz_all = []
     YN = jnp.zeros([args.Hsample, Nu])
 
@@ -143,14 +149,14 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit):
         for i in reversed(range(1, args.Ndiffuse)):
             carry = (i, rng, Yi)
             (i, rng, Yi), Yi_current, Y0s = reverse_once(carry)
-        np.savez("results/rrpr_states_over_steps.npz", states=np.array(states_xyz_all))
+        np.savez(os.path.join(out_dir, "rrpr_states_over_steps.npz"), states=np.array(states_xyz_all))
         return Yi
-
 
     rng_exp, rng = jax.random.split(rng)
     U_0 = reverse(YN, rng_exp)
 
     return U_0
+
 
 def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_env_jit):
     rng = jax.random.PRNGKey(seed=args.seed + 123)
@@ -160,7 +166,6 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
     Nu = env.action_size
 
     U = U_init.copy()
-    U_ks = [np.array(U_init)]  # save U trajectories after each iteration (including the initial global one)
 
     L = 10  # window length
     K = 1  # local iterations
@@ -171,7 +176,6 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
     sigmas_local = jnp.sqrt(1 - alphas_bar_local)
     frequenze_k = []
     tempi_k = []
-    states_xyz_local = []
     tempi_finestra = []
     for k in range(K):
         t_k_start = time.time()
@@ -195,9 +199,8 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
                     U_fulls = jnp.repeat(U[None, ...], args.Nsample, axis=0)  # (Nsample, H, Nu)
                     U_fulls = U_fulls.at[:, t_start:t_end, :].set(Y0s)
                     Nplot_local = 20
-                    state_init = reset_env_jit(rng_step)
+                    reset_env_jit(rng_step)
                     rewss, pipeline_local, _ = jax.vmap(rollout_us)(U_fulls)
-                    rews = rewss.mean(axis=-1)
                     pipeline_plot_local = pipeline_local[:Nplot_local]
                     rews = rewss.mean(axis=-1)
 
@@ -216,7 +219,10 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
 
             # Speed ratio
             speed_ratio = (L * env.dt) / delta
-            print(f"Window [{t_start}:{t_end}] - time = {delta:.3f} s - speed ratio = {speed_ratio:.3f}")
+            print(
+                f"Window [{t_start}:{t_end}] - time = {delta:.3f} s "
+                f"- speed ratio = {speed_ratio:.3f}"
+            )
             # Measure window end time
             end_win = time.time()
             delta_win = end_win - start_win
@@ -230,22 +236,26 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
         tempi_k.append(tempo_k)
 
         frequenze_k.append(frequenza_k)
-        state_init_eval = reset_env_jit(jax.random.PRNGKey(args.seed))
+        reset_env_jit(jax.random.PRNGKey(args.seed))
         rewss_eval, _, _ = rollout_us(U)
         reward_mean = rewss_eval.mean()
         rewards_per_iter.append(float(reward_mean))
         tempo_medio_finestra = np.mean(tempi_finestra)
         print(f"[Iteration {k}] mean window time = {tempo_medio_finestra:.4f} s")
-        print(f"[Iteration {k}] reward = {reward_mean:.4f} | time = {tempo_k:.3f}s | freq = {frequenza_k:.2f} Hz")
+        print(
+            f"[Iteration {k}] reward = {reward_mean:.4f} "
+            f"| time = {tempo_k:.3f}s | freq = {frequenza_k:.2f} Hz"
+        )
 
     return U, rewards_per_iter
 
 
 def main():
     args = tyro.cli(Args)
+    out_dir = create_experiment_dir("rrpr", args)
     print(jax.devices())
     print("STEP 1: Initial Reverse Diffusion")
-    env = RRPRSingleEnv(dt = 0.005)
+    env = RRPRSingleEnv(dt=0.005)
 
     step_env_jit = jax.jit(env.step)
     reset_env_jit = jax.jit(env.reset)
@@ -254,17 +264,18 @@ def main():
     rollout_us_fn = jax.jit(partial(rollout_single_us, step_env_jit, state_init))
 
     t1 = time.time()
-    U_init = run_diffusion_once(args, env, rollout_us_fn, reset_env_jit)
+    U_init = run_diffusion_once(args, env, rollout_us_fn, reset_env_jit, out_dir=out_dir)
     t2 = time.time()
     print(f"Initial reverse diffusion time: {t2 - t1:.3f} s")
     t3 = time.time()
-    U_optimized, rewards_per_iter = run_diffusion_local(args=args, U_init=U_init, env=env, rollout_us=rollout_us_fn, reset_env_jit=reset_env_jit)
+    U_optimized, rewards_per_iter = run_diffusion_local(
+        args=args, U_init=U_init, env=env, rollout_us=rollout_us_fn, reset_env_jit=reset_env_jit
+    )
     t4 = time.time()
     print(f"Local optimization time: {t4 - t3:.3f} s")
     rewards_opt, x_traj, r_terms_opt = rollout_us_fn(U_optimized)
     rewards, x_traj, r_terms = rollout_us_fn(U_init)
-    path = "results/manipulator"
-    os.makedirs(path, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
     state = reset_env_jit(jax.random.PRNGKey(args.seed))
     states = []
@@ -275,13 +286,14 @@ def main():
 
     x_init = jnp.stack(states, axis=0)
 
-    T_goal, *_ = forward_kinematics_rrpr_jax(env.qf, env.L1_num, env.L2_num,
-                                             env.L3_num, env.L4_num, env.D2_num)
+    T_goal, *_ = forward_kinematics_rrpr_jax(
+        env.qf, env.L1_num, env.L2_num, env.L3_num, env.L4_num, env.D2_num
+    )
     goal_xyz = np.array(T_goal[:3, 3])
-    np.savez("results/goal_xyz.npz", goal=goal_xyz)
+    np.savez(os.path.join(out_dir, "goal_xyz.npz"), goal=goal_xyz)
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    ax.set_aspect('equal', adjustable='datalim')
+    ax.set_aspect("equal", adjustable="datalim")
 
     state = reset_env_jit(jax.random.PRNGKey(args.seed))
     states = []
@@ -292,14 +304,14 @@ def main():
 
     x_opt = jnp.stack(states, axis=0)
     fig1, ax1 = plt.subplots(1, 1, figsize=(5, 5))
-    ax1.set_aspect('equal', adjustable='datalim')
+    ax1.set_aspect("equal", adjustable="datalim")
 
-    env.render(x_init, tau_seq=U_init, rewards=rewards, r_terms=r_terms, tag="global")
-    env.render(x_opt, tau_seq=U_optimized, rewards=rewards_opt, r_terms=r_terms_opt, tag="local")
-    np.savez("x_opt_rrpr.npz", x_opt=x_opt, goal=goal_xyz)
+    env.render(x_init, tau_seq=U_init, rewards=rewards, r_terms=r_terms, tag="global", out_dir=out_dir)
+    env.render(x_opt, tau_seq=U_optimized, rewards=rewards_opt, r_terms=r_terms_opt, tag="local", out_dir=out_dir)
+    np.savez(os.path.join(out_dir, "x_opt_rrpr.npz"), x_opt=x_opt, goal=goal_xyz)
     # === Compute metrics ===
-    metrics_global = compute_metrics(env, x_init, U_init, rewards, goal_xyz, tag="global")
-    metrics_local  = compute_metrics(env, x_opt, U_optimized, rewards_opt, goal_xyz, tag="local")
+    metrics_global = compute_metrics(env, x_init, U_init, rewards, goal_xyz, tag="global", out_dir=out_dir)
+    metrics_local = compute_metrics(env, x_opt, U_optimized, rewards_opt, goal_xyz, tag="local", out_dir=out_dir)
 
     print("\n=== Global Metrics ===")
     for k, v in metrics_global.items():

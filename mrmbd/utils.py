@@ -1,5 +1,56 @@
+import dataclasses
+import os
+from datetime import datetime
+
 import jax
+import yaml
 from jax import numpy as jnp
+
+
+def create_experiment_dir(experiment_name: str, args, variant_tags: list[str] | None = None) -> str:
+    """Create a timestamped experiment directory and save parameters.
+
+    Args:
+        experiment_name: Base name for the experiment (e.g. "crane", "rrpr", "multicar").
+        args: Dataclass or flax struct.dataclass with experiment parameters.
+        variant_tags: Optional list of tags appended to the directory name.
+
+    Returns:
+        Path to the created experiment directory.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dir_name = f"{timestamp}-{experiment_name}"
+    if variant_tags:
+        dir_name += "-" + "-".join(variant_tags)
+
+    dir_path = os.path.join("results", dir_name)
+    os.makedirs(dir_path, exist_ok=True)
+
+    # Serialize args to dict
+    try:
+        params = dataclasses.asdict(args)
+    except TypeError:
+        # Fallback for flax struct.dataclass: iterate over fields manually
+        params = {}
+        for field in dataclasses.fields(args):
+            val = getattr(args, field.name)
+            # Convert JAX/numpy arrays to Python scalars
+            if hasattr(val, "item"):
+                val = val.item()
+            params[field.name] = val
+
+    with open(os.path.join(dir_path, "params.yaml"), "w") as f:
+        yaml.dump(params, f, default_flow_style=False)
+
+    # Create/update symlink results/latest-{experiment_name}
+    symlink_path = os.path.join("results", f"latest-{experiment_name}")
+    if os.path.islink(symlink_path):
+        os.remove(symlink_path)
+    elif os.path.exists(symlink_path):
+        os.remove(symlink_path)
+    os.symlink(dir_name, symlink_path)
+
+    return dir_path
 
 
 def rollout_multi_us(step_env, state, us):
@@ -14,6 +65,7 @@ def rollout_multi_us(step_env, state, us):
         rews: rewards at each timestep, shape (H,)
         pipeline_states: full state trajectories, shape (H, n, 3)
     """
+
     def step(state, u_t):
         state = step_env(state, u_t)
         return state, (state.reward, state.pipeline_state)
@@ -24,18 +76,20 @@ def rollout_multi_us(step_env, state, us):
 
 # === Cost functions for ECD optimization ===
 
+
 @jax.jit
 def cost_fn(U_seq):
     """Quadratic cost on control sequences."""
-    return jnp.sum(U_seq ** 2, axis=(1, 2, 3))
+    return jnp.sum(U_seq**2, axis=(1, 2, 3))
 
 
 def make_reverse_penalty_cost():
     """Penalize reverse motion (v < 0) with quadratic penalty."""
+
     def sample_penalty(U_seq):
         v = U_seq[:, :, 1]  # linear velocity
         retro = jnp.minimum(v, 0)
-        penalty = 50 * jnp.mean(retro ** 2)
+        penalty = 50 * jnp.mean(retro**2)
         return penalty
 
     return jax.vmap(sample_penalty)
@@ -67,6 +121,7 @@ def make_goal_tracking_cost(xg, x0):
 
 def make_log_barrier_collision_cost(obs, n, Ra, epsilon=1e-6):
     """Log-barrier collision cost: positive near collisions, zero far away."""
+
     def cost_fn(trajs):
         def sample_cost(traj):
             def timestep_cost(state_t):
@@ -76,10 +131,7 @@ def make_log_barrier_collision_cost(obs, n, Ra, epsilon=1e-6):
                 dists = jnp.linalg.norm(diffs, axis=1)
 
                 dist_safe = jnp.clip(dists - 2 * Ra, a_min=epsilon)
-                if obs:
-                    barrier = -jnp.log(dist_safe)
-                else:
-                    barrier = jnp.maximum(-jnp.log(dist_safe), 0.0)
+                barrier = -jnp.log(dist_safe) if obs else jnp.maximum(-jnp.log(dist_safe), 0.0)
 
                 return jnp.mean(barrier)
 
@@ -114,6 +166,7 @@ def make_formation_cost_fn(x0_all):
 
 def make_residual_fn(penalize, state_init, env, Nsample):
     """Creates a residual function that measures final position error from goal."""
+
     @jax.jit
     def residual_fn(pipeline_states):
         s0 = state_init.pipeline_state
@@ -136,6 +189,7 @@ def make_residual_fn(penalize, state_init, env, Nsample):
 
 def make_static_obstacle_cost(static_obs, robot_radius, epsilon=1e-3, margin=0.05, scale=1.0):
     """Log-barrier + 1/x cost for proximity to static obstacles."""
+
     def cost_fn(trajs):
         def sample_cost(traj):
             def timestep_cost(state_t):
@@ -177,8 +231,7 @@ def make_orient_final_cost_fn(xg, w_theta=1.0, decay=10.0):
 
         dists = jnp.linalg.norm(pos_T - goal_pos, axis=-1)
         weights = jnp.exp(-decay * dists)
-        theta_diff = jnp.arctan2(jnp.sin(theta_T - theta_g),
-                                 jnp.cos(theta_T - theta_g))
+        theta_diff = jnp.arctan2(jnp.sin(theta_T - theta_g), jnp.cos(theta_T - theta_g))
         penalties = weights * theta_diff**2
         return w_theta * jnp.mean(penalties)
 
@@ -188,10 +241,16 @@ def make_orient_final_cost_fn(xg, w_theta=1.0, decay=10.0):
 def make_lagrangian_fn(state_init, env, Nsample):
     """Lagrangian function for equality-constrained optimization (LIDEC)."""
     residual_fn = make_residual_fn(env.penalize_backward, state_init, env, Nsample)
-    log_barrier_fn = make_log_barrier_collision_cost(env.obstacles_enabled, env.n, env.Ra, epsilon=1e-3)
+    log_barrier_fn = make_log_barrier_collision_cost(
+        env.obstacles_enabled, env.n, env.Ra, epsilon=1e-3
+    )
     goal_cost_fn = make_goal_tracking_cost(env.xg, env.x0)
     formation_cost_fn = make_formation_cost_fn(env.x0) if env.formation_shift else lambda x: 0.0
-    obstacle_cost_fn = make_static_obstacle_cost(env.static_obstacles, env.Ra) if env.obstacles_enabled else lambda x: 0.0
+    obstacle_cost_fn = (
+        make_static_obstacle_cost(env.static_obstacles, env.Ra)
+        if env.obstacles_enabled
+        else lambda x: 0.0
+    )
     reverse_penalty_fn = make_reverse_penalty_cost() if env.penalize_backward else lambda x: 0.0
     orient_cost_fn = make_orient_final_cost_fn(env.xg) if env.penalize_backward else lambda x: 0.0
 
@@ -205,7 +264,6 @@ def make_lagrangian_fn(state_init, env, Nsample):
         control_cost_local = cost_fn(Y0s_windows)
 
         reverse_penalty_global = reverse_penalty_fn(Y0s)
-        reverse_penalty_local = reverse_penalty_fn(Y0s_windows)
 
         barrier_cost_global = log_barrier_fn(trajs)
         barrier_cost_local = log_barrier_fn(pipeline_states_window)
@@ -220,23 +278,48 @@ def make_lagrangian_fn(state_init, env, Nsample):
         obstacle_cost_local = obstacle_cost_fn(pipeline_states_window)
 
         orient_cost_global = orient_cost_fn(trajs)
-        orient_cost_local = orient_cost_fn(pipeline_states_window)
 
         h = residual_fn(pipeline_states)
         h_flat = h.reshape((Y0s.shape[0], -1))
 
-        L_cost_local = control_cost_local + 30 * barrier_cost_local + 20 * goal_cost_local + 15 * formation_cost_local + 10 * obstacle_cost_local
-        L_cost_global = 0.5 * control_cost_global + 25 * barrier_cost_global + 30 * goal_cost_global + 15 * formation_cost_global + 10 * obstacle_cost_global + 30 * orient_cost_global + 10 * reverse_penalty_global
+        L_cost_local = (
+            control_cost_local
+            + 30 * barrier_cost_local
+            + 20 * goal_cost_local
+            + 15 * formation_cost_local
+            + 10 * obstacle_cost_local
+        )
+        L_cost_global = (
+            0.5 * control_cost_global
+            + 25 * barrier_cost_global
+            + 30 * goal_cost_global
+            + 15 * formation_cost_global
+            + 10 * obstacle_cost_global
+            + 30 * orient_cost_global
+            + 10 * reverse_penalty_global
+        )
 
-        L_constraint = jnp.dot(h_flat, lambda_goal) + 0.5 * mu_k * jnp.sum(h_flat ** 2, axis=1)
+        L_constraint = jnp.dot(h_flat, lambda_goal) + 0.5 * mu_k * jnp.sum(h_flat**2, axis=1)
         L_tot = L_cost_global + L_constraint
 
-        return L_cost_local, L_constraint, L_tot, control_cost_global, barrier_cost_global, goal_cost_global, h_flat, obstacle_cost_global, reverse_penalty_global, orient_cost_global
+        return (
+            L_cost_local,
+            L_constraint,
+            L_tot,
+            control_cost_global,
+            barrier_cost_global,
+            goal_cost_global,
+            h_flat,
+            obstacle_cost_global,
+            reverse_penalty_global,
+            orient_cost_global,
+        )
 
     return lagrangian
 
 
 # === Noise schedule functions ===
+
 
 def cosine_beta_schedule(T, s=0.008):
     """Cosine schedule for betas, as in Improved DDPM."""

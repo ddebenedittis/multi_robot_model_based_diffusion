@@ -49,3 +49,10 @@ python -m mrmbd.scripts.graphic_crane     # crane diffusion animation
 python -m mrmbd.scripts.graphic_man       # RRPR 3D EE trajectory animation
 python -m mrmbd.scripts.cosine            # noise schedule comparison plots
 ```
+
+## Development
+Install pre-commit hooks
+```bash
+sudo apt install pre-commit  # if not already installed
+pre-commit install
+```

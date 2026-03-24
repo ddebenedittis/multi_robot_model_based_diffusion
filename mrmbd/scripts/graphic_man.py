@@ -1,19 +1,21 @@
 """RRPR manipulator 3D end-effector trajectory animation through diffusion steps."""
 
+import matplotlib
 import numpy as np
 from matplotlib.animation import FuncAnimation
-import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 from mrmbd.envs.class_manipulator import RRPRSingleEnv, forward_kinematics_rrpr_jax
 
 # Setup manipulator
 env = RRPRSingleEnv()
 L1, L2, L3, L4, D2 = env.L1_num, env.L2_num, env.L3_num, env.L4_num, env.D2_num
-goal_xyz = np.load("results/goal_xyz.npz", allow_pickle=True)['goal']
+goal_xyz = np.load("results/latest-rrpr/goal_xyz.npz", allow_pickle=True)["goal"]
 
 # Load saved states from reverse diffusion
-states = np.load("results/rrpr_states_over_steps.npz", allow_pickle=True)['states']
+states = np.load("results/latest-rrpr/rrpr_states_over_steps.npz", allow_pickle=True)["states"]
 Nsteps, Nplot, Hplus1, _ = states.shape
 
 # Precompute all end-effector trajectories
@@ -32,22 +34,24 @@ for step in range(Nsteps):
 
 # Setup figure
 fig = plt.figure(figsize=(10, 6))
-ax = fig.add_subplot(111, projection='3d')
+ax = fig.add_subplot(111, projection="3d")
 ax.set_xlim([-1.8, 1.8])
 ax.set_ylim([-1.8, 1.8])
 ax.set_zlim([-1.5, 0.3])
-ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+ax.set_zlabel("z")
 ax.view_init(elev=45, azim=45)
-goal_marker = ax.scatter(*goal_xyz, c='red', marker='x', s=60, label='Goal')
+goal_marker = ax.scatter(*goal_xyz, c="red", marker="x", s=60, label="Goal")
 ax.legend()
 
 # Initialize lines
 colors = plt.cm.plasma(np.linspace(0, 1, Nplot))
-lines = [ax.plot([], [], [], '-', color=colors[i], alpha=0.8)[0] for i in range(Nplot)]
+lines = [ax.plot([], [], [], "-", color=colors[i], alpha=0.8)[0] for i in range(Nplot)]
 
 
 def update(frame):
-    ax.set_title(f"Reverse diffusion step {frame+1}/{Nsteps}")
+    ax.set_title(f"Reverse diffusion step {frame + 1}/{Nsteps}")
     step_trajs = all_ee_trajs[frame]
     for i in range(Nplot):
         traj = step_trajs[i]
@@ -57,5 +61,5 @@ def update(frame):
 
 
 ani = FuncAnimation(fig, update, frames=Nsteps, interval=300, blit=False)
-ani.save("results/rrpr_all_ee_trajs.mp4", fps=3)
-print("Video saved: results/rrpr_all_ee_trajs.mp4")
+ani.save("results/latest-rrpr/rrpr_all_ee_trajs.mp4", fps=3)
+print("Video saved: results/latest-rrpr/rrpr_all_ee_trajs.mp4")

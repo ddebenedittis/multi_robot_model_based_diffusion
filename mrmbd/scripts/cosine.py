@@ -1,9 +1,9 @@
 """Noise schedule comparison plots: linear vs cosine vs cosine-scaled."""
 
-import numpy as np
 import matplotlib.pyplot as plt
-from mrmbd.utils import cosine_beta_schedule, cosine_beta_schedule_scaled
+import numpy as np
 
+from mrmbd.utils import cosine_beta_schedule, cosine_beta_schedule_scaled
 
 # Parameters
 T = 100
@@ -31,28 +31,52 @@ ab_cos_scaled, sig_cos_scaled, snr_cos_scaled = compute_alpha_sigma(betas_cos_sc
 # Alpha-bar comparison
 timesteps = np.linspace(0, 1, len(ab_lin))
 plt.figure(figsize=(6, 4))
-plt.plot(timesteps, ab_cos, label="cosine", color='darkorange')
+plt.plot(timesteps, ab_cos, label="cosine", color="darkorange")
 plt.xlabel("diffusion step (t/T)")
 plt.ylabel(r"$\bar{\alpha}_t$")
 plt.title("Comparison of Linear and Cosine Noise Schedules")
-plt.legend(); plt.grid(True); plt.tight_layout()
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
 plt.savefig("figure5_cosine_schedule.png", dpi=300)
 plt.close()
 
 # Beta schedules comparison
 fig_beta, axs = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
-axs[0].plot(betas_lin, color="blue"); axs[0].set_title("Beta Schedule - Linear"); axs[0].set_ylabel("beta_t"); axs[0].grid()
-axs[1].plot(betas_cos, color="green"); axs[1].set_title("Beta Schedule - Cosine"); axs[1].set_ylabel("beta_t"); axs[1].grid()
-axs[2].plot(betas_cos_scaled, color="red"); axs[2].set_title("Beta Schedule - Cosine Scaled"); axs[2].set_ylabel("beta_t"); axs[2].set_xlabel("Timestep"); axs[2].grid()
+axs[0].plot(betas_lin, color="blue")
+axs[0].set_title("Beta Schedule - Linear")
+axs[0].set_ylabel("beta_t")
+axs[0].grid()
+axs[1].plot(betas_cos, color="green")
+axs[1].set_title("Beta Schedule - Cosine")
+axs[1].set_ylabel("beta_t")
+axs[1].grid()
+axs[2].plot(betas_cos_scaled, color="red")
+axs[2].set_title("Beta Schedule - Cosine Scaled")
+axs[2].set_ylabel("beta_t")
+axs[2].set_xlabel("Timestep")
+axs[2].grid()
 fig_beta.suptitle("Beta Schedules Comparison", fontsize=16)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig("beta_cosine.png", dpi=300); plt.close()
+plt.savefig("beta_cosine.png", dpi=300)
+plt.close()
 
 # Sigma schedules comparison
 fig_sigma, ax_sigma = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
-ax_sigma[0].plot(sig_lin, color="blue"); ax_sigma[0].set_title("Sigma_t - Linear"); ax_sigma[0].set_ylabel("sigma_t"); ax_sigma[0].grid()
-ax_sigma[1].plot(sig_cos, color="green"); ax_sigma[1].set_title("Sigma_t - Cosine"); ax_sigma[1].set_ylabel("sigma_t"); ax_sigma[1].grid()
-ax_sigma[2].plot(sig_cos_scaled, color="red"); ax_sigma[2].set_title("Sigma_t - Cosine Scaled"); ax_sigma[2].set_ylabel("sigma_t"); ax_sigma[2].set_xlabel("Timestep"); ax_sigma[2].grid()
+ax_sigma[0].plot(sig_lin, color="blue")
+ax_sigma[0].set_title("Sigma_t - Linear")
+ax_sigma[0].set_ylabel("sigma_t")
+ax_sigma[0].grid()
+ax_sigma[1].plot(sig_cos, color="green")
+ax_sigma[1].set_title("Sigma_t - Cosine")
+ax_sigma[1].set_ylabel("sigma_t")
+ax_sigma[1].grid()
+ax_sigma[2].plot(sig_cos_scaled, color="red")
+ax_sigma[2].set_title("Sigma_t - Cosine Scaled")
+ax_sigma[2].set_ylabel("sigma_t")
+ax_sigma[2].set_xlabel("Timestep")
+ax_sigma[2].grid()
 fig_sigma.suptitle("Sigma_t (sqrt(1 - alpha_bar)) Comparison", fontsize=16)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig("sigma_cosine.png", dpi=300); plt.close()
+plt.savefig("sigma_cosine.png", dpi=300)
+plt.close()

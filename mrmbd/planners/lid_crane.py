@@ -1,28 +1,32 @@
-from functools import partial
-import jax
-import jax.numpy as jnp
-import numpy as np
-import time
 import os
-import tyro
+import time
+from functools import partial
+
+import jax
 import jax.debug
-from mrmbd.envs.class_carroponte import CranePendulumEnv, Args, rollout_single_us
-from mrmbd.utils import cosine_beta_schedule
-import matplotlib.animation as animation
-from matplotlib.animation import FuncAnimation
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
+import tyro
+from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Rectangle
 
+from mrmbd.envs.class_overhead_crane import Args, CranePendulumEnv, rollout_single_us
+from mrmbd.utils import create_experiment_dir
 
-def animate_crane_pendulum(x_traj, l, dt, tag="global", inputs=None, speedup=1, blit=True, show=False):
+
+def animate_crane_pendulum(
+    x_traj, l, dt, tag="global", inputs=None, speedup=1, blit=True, show=False, out_dir="results/crane"
+):
     """
     Animation of the overhead crane with pendulum on a horizontal rail.
     """
 
     # --- Sanity check ---
     x_traj = np.asarray(x_traj)
-    assert x_traj.ndim == 2 and x_traj.shape[1] == 4, \
+    assert x_traj.ndim == 2 and x_traj.shape[1] == 4, (
         f"x_traj expected shape (T,4) [theta,dtheta,x,dx], got {x_traj.shape}"
+    )
     T = len(x_traj)
 
     # Remap: [x, dx, theta, dtheta]
@@ -52,17 +56,19 @@ def animate_crane_pendulum(x_traj, l, dt, tag="global", inputs=None, speedup=1, 
             self.rod = None
             self.force = None
             self.time_txt = self.ax.text(
-                0.02, 0.95, "time = 0.00 s",
-                transform=self.ax.transAxes, ha="left", va="top"
+                0.02, 0.95, "time = 0.00 s", transform=self.ax.transAxes, ha="left", va="top"
             )
 
         def init(self):
             # Ground line
             self.ax.plot(
                 [-100, 100],
-                [-self.cart_height/2 - self.wheel_radius*2,
-                 -self.cart_height/2 - self.wheel_radius*2],
-                linewidth=1, color='k'
+                [
+                    -self.cart_height / 2 - self.wheel_radius * 2,
+                    -self.cart_height / 2 - self.wheel_radius * 2,
+                ],
+                linewidth=1,
+                color="k",
             )
             return []
 
@@ -72,28 +78,48 @@ def animate_crane_pendulum(x_traj, l, dt, tag="global", inputs=None, speedup=1, 
             # Create artists if they don't exist yet
             if self.cart is None:
                 self.cart = self.ax.add_patch(
-                    Rectangle((x - self.cart_width/2, -self.cart_height/2),
-                              self.cart_width, self.cart_height,
-                              linewidth=1, edgecolor='k', facecolor='grey')
+                    Rectangle(
+                        (x - self.cart_width / 2, -self.cart_height / 2),
+                        self.cart_width,
+                        self.cart_height,
+                        linewidth=1,
+                        edgecolor="k",
+                        facecolor="grey",
+                    )
                 )
                 self.wheel0 = self.ax.add_patch(
-                    Circle((x - self.cart_width/4, -self.cart_height/2 - self.wheel_radius),
-                           self.wheel_radius, linewidth=1, edgecolor='k', facecolor='w')
+                    Circle(
+                        (x - self.cart_width / 4, -self.cart_height / 2 - self.wheel_radius),
+                        self.wheel_radius,
+                        linewidth=1,
+                        edgecolor="k",
+                        facecolor="w",
+                    )
                 )
                 self.wheel1 = self.ax.add_patch(
-                    Circle((x + self.cart_width/4, -self.cart_height/2 - self.wheel_radius),
-                           self.wheel_radius, linewidth=1, edgecolor='k', facecolor='w')
+                    Circle(
+                        (x + self.cart_width / 4, -self.cart_height / 2 - self.wheel_radius),
+                        self.wheel_radius,
+                        linewidth=1,
+                        edgecolor="k",
+                        facecolor="w",
+                    )
                 )
-                self.rod, = self.ax.plot([], [], 'o-k', lw=2)
+                (self.rod,) = self.ax.plot([], [], "o-k", lw=2)
                 self.force = self.ax.annotate(
-                    "", xy=(0, 0), xytext=(0, 0),
-                    arrowprops=dict(arrowstyle="->", color='red')
+                    "", xy=(0, 0), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="red")
                 )
 
             # Update cart and wheels
-            self.cart.set_x(x - self.cart_width/2)
-            self.wheel0.center = (x - self.cart_width/4, -self.cart_height/2 - self.wheel_radius)
-            self.wheel1.center = (x + self.cart_width/4, -self.cart_height/2 - self.wheel_radius)
+            self.cart.set_x(x - self.cart_width / 2)
+            self.wheel0.center = (
+                x - self.cart_width / 4,
+                -self.cart_height / 2 - self.wheel_radius,
+            )
+            self.wheel1.center = (
+                x + self.cart_width / 4,
+                -self.cart_height / 2 - self.wheel_radius,
+            )
 
             # Pendulum
             tip_x = x + self.pend_length * np.sin(th)
@@ -101,7 +127,7 @@ def animate_crane_pendulum(x_traj, l, dt, tag="global", inputs=None, speedup=1, 
             self.rod.set_data([x, tip_x], [0.0, tip_y])
 
             # Time label
-            self.time_txt.set_text(f"time = {frame*self.dt:.2f} s")
+            self.time_txt.set_text(f"time = {frame * self.dt:.2f} s")
 
             return [self.cart, self.wheel0, self.wheel1, self.rod, self.force, self.time_txt]
 
@@ -109,7 +135,7 @@ def animate_crane_pendulum(x_traj, l, dt, tag="global", inputs=None, speedup=1, 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.set_xlim(-2.5, 2.5)
     ax.set_ylim(-2.5, 2.5)
-    ax.set_aspect('equal')
+    ax.set_aspect("equal")
     ax.grid(True)
     ax.set_title(f"Crane Pendulum - Trajectory [{tag}]")
 
@@ -119,18 +145,12 @@ def animate_crane_pendulum(x_traj, l, dt, tag="global", inputs=None, speedup=1, 
     fps_save = max(1, int(round(1.0 / dt)))
 
     ani = FuncAnimation(
-        fig=fig,
-        func=anim.update,
-        init_func=anim.init,
-        frames=T,
-        interval=interval_ms,
-        blit=blit
+        fig=fig, func=anim.update, init_func=anim.init, frames=T, interval=interval_ms, blit=blit
     )
 
     # Save video
-    out_dir = "results/crane"
     os.makedirs(out_dir, exist_ok=True)
-    video_path = os.path.join(out_dir, f"carroponte_{tag}.mp4")
+    video_path = os.path.join(out_dir, f"overhead_crane_{tag}.mp4")
     ani.save(video_path, fps=fps_save, dpi=200)
 
     if show:
@@ -145,7 +165,7 @@ def run_diffusion_once(args: Args, env, rollout_us_fn, reset_env_jit):
     Nu = env.action_size
 
     rng, rng_reset = jax.random.split(rng)
-    state_init = reset_env_jit(rng_reset)
+    reset_env_jit(rng_reset)
 
     # Diffusion noise schedule
     betas = jnp.linspace(args.beta0, args.betaT, args.Ndiffuse)
@@ -207,7 +227,7 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, res
     H = args.Hsample
     Nu = env.action_size
     L = 50  # window size
-    K = 2   # number of iterations
+    K = 2  # number of iterations
     rewards_per_iter = []
 
     U = U_init.copy()
@@ -238,7 +258,7 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, res
                     # Insert Y0s into full trajectory
                     U_fulls = jnp.repeat(U[None, ...], args.Nsample, axis=0)  # (Nsample, H, Nu)
                     U_fulls = U_fulls.at[:, t_start:t_end, :].set(Y0s)
-                    state_init = reset_env_jit(rng_step)
+                    reset_env_jit(rng_step)
                     rewss, _, _ = jax.vmap(rollout_us_fn)(U_fulls)
 
                     rews = rewss.mean(axis=-1)
@@ -265,18 +285,23 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, res
         t_k_end = time.time()
         iter_time = t_k_end - t_k_start
         iter_freq = 1.0 / iter_time if iter_time > 0 else 0.0
-        print(f"Mean time per local window = {np.mean(times)*1000:.2f} ms")
+        print(f"Mean time per local window = {np.mean(times) * 1000:.2f} ms")
 
-        state_init_eval = reset_env_jit(jax.random.PRNGKey(args.seed))
+        reset_env_jit(jax.random.PRNGKey(args.seed))
         rewss_eval, _, _ = rollout_us_fn(U)
         reward_mean = rewss_eval.mean()
         rewards_per_iter.append(float(reward_mean))
-        print(f"[Iteration {k}] reward = {reward_mean:.4f} | time = {iter_time:.3f}s | freq = {iter_freq:.2f} Hz")
+        print(
+            f"[Iteration {k}] reward = {reward_mean:.4f} "
+            f"| time = {iter_time:.3f}s | freq = {iter_freq:.2f} Hz"
+        )
 
     return U, rewards_per_iter
 
+
 def main():
     args = tyro.cli(Args)
+    out_dir = create_experiment_dir("crane", args)
     env = CranePendulumEnv(dt=0.04)
 
     step_env_jit = jax.jit(env.step)
@@ -289,7 +314,9 @@ def main():
     U_init = run_diffusion_once(args, env, rollout_us_fn, reset_env_jit)
 
     print("== Phase 2: Iterative local optimization ==")
-    U_opt, _ = run_diffusion_local(args=args, U_init=U_init, env=env, rollout_us_fn=rollout_us_fn, reset_env_jit=reset_env_jit)
+    U_opt, _ = run_diffusion_local(
+        args=args, U_init=U_init, env=env, rollout_us_fn=rollout_us_fn, reset_env_jit=reset_env_jit
+    )
 
     print("== Final rollout and visualization ==")
     rewards, x_traj, r_terms = rollout_us_fn(U_init)
@@ -303,7 +330,7 @@ def main():
     x_init = jnp.stack(states, axis=0)
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    ax.set_aspect('equal', adjustable='datalim')
+    ax.set_aspect("equal", adjustable="datalim")
 
     state = reset_env_jit(jax.random.PRNGKey(args.seed))
     states = []
@@ -314,24 +341,24 @@ def main():
 
     x_opt = jnp.stack(states, axis=0)
     fig1, ax1 = plt.subplots(1, 1, figsize=(5, 5))
-    ax1.set_aspect('equal', adjustable='datalim')
+    ax1.set_aspect("equal", adjustable="datalim")
 
-    env.render(x_init, U=U_init, r_terms=r_terms, rewards=rewards, tag="global")
-    env.render(x_opt, U=U_opt, r_terms=r_terms_opt, rewards=rewards_opt, tag="local")
+    env.render(x_init, U=U_init, r_terms=r_terms, rewards=rewards, tag="global", out_dir=out_dir)
+    env.render(x_opt, U=U_opt, r_terms=r_terms_opt, rewards=rewards_opt, tag="local", out_dir=out_dir)
 
     # Animation
-    animate_crane_pendulum(x_init, env.l, env.dt, tag="global")
-    animate_crane_pendulum(x_opt, env.l, env.dt, tag="local")
+    animate_crane_pendulum(x_init, env.l, env.dt, tag="global", out_dir=out_dir)
+    animate_crane_pendulum(x_opt, env.l, env.dt, tag="local", out_dir=out_dir)
 
     # Extended metrics
     # === Compute metrics ===
     theta = x_opt[:, 0]
     x = x_opt[:, 2]
 
-    theta_ref = 0.0        # pendulum upright
-    x_ref = env.qf[2]     # cart final position
+    theta_ref = 0.0  # pendulum upright
+    x_ref = env.qf[2]  # cart final position
 
-    t = np.arange(0, len(x_opt)*env.dt, env.dt)
+    t = np.arange(0, len(x_opt) * env.dt, env.dt)
     err_theta = np.arctan2(np.sin(theta_ref - theta), np.cos(theta_ref - theta))
     err_x = x_ref - x
     err0 = abs(np.arctan2(np.sin(theta_ref - theta[0]), np.cos(theta_ref - theta[0]))) + 1e-6
@@ -348,20 +375,20 @@ def main():
     band_x = tol * (1.0 if x_ref == 0 else abs(x_ref))
 
     def settling_time(err, t, band, N=10):
-        for i in range(len(err)-N):
-            if np.all(np.abs(err[i:i+N]) < band):
+        for i in range(len(err) - N):
+            if np.all(np.abs(err[i : i + N]) < band):
                 return t[i]
         return np.nan
 
     Ts_theta = settling_time(err_theta, t, band_theta)
     Ts_x = settling_time(err_x, t, band_x)
 
-    overshoot_theta = (np.max(np.abs(err_theta)) - err0)/err0 * 100
+    overshoot_theta = (np.max(np.abs(err_theta)) - err0) / err0 * 100
     overshoot_x = np.max(np.abs(x - x_ref)) * 100
 
     # === Actual control values ===
     U_real = U_opt.squeeze() * env.max_u  # real scale [N]
-    control_energy = np.sum(U_real**2)*env.dt
+    control_energy = np.sum(U_real**2) * env.dt
     control_max = np.max(np.abs(U_real))
 
     print(f"MSE theta = {MSE_theta:.4f}, MAE theta = {MAE_theta:.4f}, |e|_inf = {Einf_theta:.4f}")
@@ -372,14 +399,14 @@ def main():
     print(f"Max force = {control_max} N")
 
     # === Energy and plots ===
-    out_dir = "results/crane"
-    os.makedirs(out_dir, exist_ok=True)
 
     dpos = np.gradient(x_opt[:, 2], env.dt)
     dtheta = np.gradient(x_opt[:, 0], env.dt)
 
-    E_kin = 0.5*env.M*dpos**2 + 0.5*env.m*((dpos + env.l*dtheta*np.cos(theta))**2 + (env.l*dtheta*np.sin(theta))**2)
-    E_pot = env.m*env.g*env.l*(np.cos(theta))
+    E_kin = 0.5 * env.M * dpos**2 + 0.5 * env.m * (
+        (dpos + env.l * dtheta * np.cos(theta)) ** 2 + (env.l * dtheta * np.sin(theta)) ** 2
+    )
+    E_pot = env.m * env.g * env.l * (np.cos(theta))
     E_tot = E_kin + E_pot
 
     # === Angular error plot ===
@@ -395,7 +422,7 @@ def main():
     plt.figure()
     plt.plot(t, E_kin, label="Kinetic energy")
     plt.plot(t, E_pot, label="Potential energy")
-    plt.plot(t, E_tot, '--', label="Total energy")
+    plt.plot(t, E_tot, "--", label="Total energy")
     plt.xlabel("Time [s]")
     plt.ylabel("Energy [J]")
     plt.title("Energy over time")
@@ -427,7 +454,8 @@ def main():
     plt.suptitle("System state evolution (Diffusion)")
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "stati_diffusion.png"), dpi=200)
-    plt.close('all')
+    plt.close("all")
+
 
 if __name__ == "__main__":
     main()

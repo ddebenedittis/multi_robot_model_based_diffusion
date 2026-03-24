@@ -18,6 +18,7 @@ dependencies = [
     "sympy",
     "tqdm",
     "tyro",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "SIM", "RET"]
+ignore = ["E741", "RET504"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
