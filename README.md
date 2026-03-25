@@ -10,8 +10,10 @@ These are applied to three domains: multi-car (4 unicycles), RRPR manipulator (4
 
 ## Installation
 
-```bash
-# Install the original MBD from the submodule (for running original experiments)
+Clone the repository with submodules:
+
+```shell
+# Install MBD from the submodule (for running original experiments)
 pip install -e ./mbd
 
 # Install mrmbd
@@ -21,7 +23,7 @@ pip install -e .
 ## Reproducing Results
 
 ### Multi-Car: LID (two-phase, no constraints)
-```bash
+```shell
 python -m mrmbd.planners.lid_multicar --n_robots 4 [--ECD] [--obstacles_enabled] [--formation_shift] [--penalize_backward] [--cosine] [--filter]
 ```
 Where:
@@ -33,17 +35,17 @@ Where:
 - `--filter`: apply a Butterworth filter to the noise samples
 
 ### RRPR Manipulator
-```bash
+```shell
 python -m mrmbd.planners.lid_rrpr
 ```
 
 ### Crane Pendulum
-```bash
+```shell
 python -m mrmbd.planners.lid_crane
 ```
 
 ### Visualization / Post-processing
-```bash
+```shell
 python -m mrmbd.scripts.graphic           # multi-car analysis plots
 python -m mrmbd.scripts.graphic_crane     # crane diffusion animation
 python -m mrmbd.scripts.graphic_man       # RRPR 3D EE trajectory animation
@@ -52,7 +54,7 @@ python -m mrmbd.scripts.cosine            # noise schedule comparison plots
 
 ## Development
 Install pre-commit hooks
-```bash
+```shell
 sudo apt install pre-commit  # if not already installed
 pre-commit install
 ```

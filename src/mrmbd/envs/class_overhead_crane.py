@@ -9,6 +9,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from flax import struct
 
+from mrmbd.utils import rk4
+
 
 @struct.dataclass
 class Args:
@@ -26,22 +28,6 @@ class State:
     pipeline_state: jnp.ndarray  # state: [theta, dtheta, x, dx]
     reward: float
     r_terms: jnp.ndarray
-
-
-def rollout_single_us(step_env, state, us):
-    """Execute a rollout from an initial state with a sequence of controls."""
-
-    def step_fn(state, u_t):
-        state = step_env(state, u_t)
-        return state, (state.reward, state.pipeline_state, state.r_terms)
-
-    _, (rews, states, r_terms) = jax.lax.scan(step_fn, state, us)
-
-    # Prepend initial state
-    states = jnp.vstack([state.pipeline_state[None], states])
-    rews = jnp.hstack([0.0, rews])
-
-    return rews, states, r_terms
 
 
 class CranePendulumEnv:
@@ -88,13 +74,6 @@ class CranePendulumEnv:
             [jnp.squeeze(dtheta), jnp.squeeze(theta_ddot), jnp.squeeze(dx), jnp.squeeze(x_ddot)]
         )
 
-    def rk4(self, f, x, u, dt):
-        k1 = f(x, u)
-        k2 = f(x + dt / 2 * k1, u)
-        k3 = f(x + dt / 2 * k2, u)
-        k4 = f(x + dt * k3, u)
-        return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
-
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng):
         return State(pipeline_state=self.q0, reward=0.0, r_terms=jnp.zeros(3))
@@ -102,7 +81,7 @@ class CranePendulumEnv:
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: State, action: jax.Array) -> State:
         u = action * self.max_u
-        q_next = self.rk4(self.dynamics, state.pipeline_state, u, self.dt)
+        q_next = rk4(self.dynamics, state.pipeline_state, u, self.dt)
         r, r_terms = self.get_reward(q_next, u)
         return State(pipeline_state=q_next, reward=r, r_terms=r_terms)
 

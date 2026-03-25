@@ -7,6 +7,33 @@ import yaml
 from jax import numpy as jnp
 
 
+def rk4(dynamics, x, u, dt):
+    k1 = dynamics(x, u)
+    k2 = dynamics(x + dt / 2 * k1, u)
+    k3 = dynamics(x + dt / 2 * k2, u)
+    k4 = dynamics(x + dt * k3, u)
+    return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+
+def rollout_single_us(step_env, state, us):
+    def step_fn(state, u_t):
+        state = step_env(state, u_t)
+        return state, (state.reward, state.pipeline_state, state.r_terms)
+
+    _, (rews, states, r_terms) = jax.lax.scan(step_fn, state, us)
+    states = jnp.vstack([state.pipeline_state[None], states])
+    rews = jnp.hstack([0.0, rews])
+    return rews, states, r_terms
+
+
+def linear_beta_schedule(beta0, betaT, N):
+    betas = jnp.linspace(beta0, betaT, N)
+    alphas = 1.0 - betas
+    alphas_bar = jnp.cumprod(alphas)
+    sigmas = jnp.sqrt(1 - alphas_bar)
+    return betas, alphas, alphas_bar, sigmas
+
+
 def create_experiment_dir(experiment_name: str, args, variant_tags: list[str] | None = None) -> str:
     """Create a timestamped experiment directory and save parameters.
 
@@ -44,9 +71,7 @@ def create_experiment_dir(experiment_name: str, args, variant_tags: list[str] | 
 
     # Create/update symlink results/latest-{experiment_name}
     symlink_path = os.path.join("results", f"latest-{experiment_name}")
-    if os.path.islink(symlink_path):
-        os.remove(symlink_path)
-    elif os.path.exists(symlink_path):
+    if os.path.islink(symlink_path) or os.path.exists(symlink_path):
         os.remove(symlink_path)
     os.symlink(dir_name, symlink_path)
 

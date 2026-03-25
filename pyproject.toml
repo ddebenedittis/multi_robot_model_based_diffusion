@@ -14,6 +14,8 @@ dependencies = [
     "jax",
     "matplotlib",
     "numpy",
+    "pandas",
+    "pyarrow",
     "scipy",
     "sympy",
     "tqdm",
@@ -24,7 +26,11 @@ dependencies = [
 [project.optional-dependencies]
 cuda12 = ["jax[cuda12]"]
 
+[tool.setuptools.package-dir]
+"" = "src"
+
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["mrmbd", "mrmbd.*"]
 
 [tool.ruff]
@@ -37,6 +43,7 @@ ignore = ["E741", "RET504"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"scripts/*.py" = ["E402"]
 
 [tool.ruff.format]
 docstring-code-format = true

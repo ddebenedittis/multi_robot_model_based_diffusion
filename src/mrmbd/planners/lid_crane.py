@@ -11,12 +11,20 @@ import tyro
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Rectangle
 
-from mrmbd.envs.class_overhead_crane import Args, CranePendulumEnv, rollout_single_us
-from mrmbd.utils import create_experiment_dir
+from mrmbd.envs.class_overhead_crane import Args, CranePendulumEnv
+from mrmbd.utils import create_experiment_dir, linear_beta_schedule, rollout_single_us
 
 
 def animate_crane_pendulum(
-    x_traj, l, dt, tag="global", inputs=None, speedup=1, blit=True, show=False, out_dir="results/crane"
+    x_traj,
+    l,
+    dt,
+    tag="global",
+    inputs=None,
+    speedup=1,
+    blit=True,
+    show=False,
+    out_dir="results/crane",
 ):
     """
     Animation of the overhead crane with pendulum on a horizontal rail.
@@ -168,16 +176,11 @@ def run_diffusion_once(args: Args, env, rollout_us_fn, reset_env_jit):
     reset_env_jit(rng_reset)
 
     # Diffusion noise schedule
-    betas = jnp.linspace(args.beta0, args.betaT, args.Ndiffuse)
-    alphas = 1.0 - betas
-    alphas_bar = jnp.cumprod(alphas)
-    sigmas = jnp.sqrt(1.0 - alphas_bar)
+    betas, alphas, alphas_bar, sigmas = linear_beta_schedule(args.beta0, args.betaT, args.Ndiffuse)
     YN = jnp.zeros([args.Hsample, Nu])
-    times = []
 
     def reverse_once(carry):
         i, rng, Ybar_i = carry
-        t0 = time.perf_counter()
 
         Yi = Ybar_i * jnp.sqrt(alphas_bar[i])
 
@@ -202,8 +205,6 @@ def run_diffusion_once(args: Args, env, rollout_us_fn, reset_env_jit):
         Ybar_im1 = Yim1 / jnp.sqrt(alphas_bar[i - 1])
 
         jax.debug.print("Step {}: mean reward = {:.4f}, std = {:.4f}", i, rews.mean(), rew_std)
-        t1 = time.perf_counter()
-        times.append(t1 - t0)
 
         return (i - 1, rng, Ybar_im1), Yi, Y0s
 
@@ -221,8 +222,6 @@ def run_diffusion_once(args: Args, env, rollout_us_fn, reset_env_jit):
 
 
 def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, reset_env_jit):
-    times = []
-
     rng = jax.random.PRNGKey(args.seed + 123)
     H = args.Hsample
     Nu = env.action_size
@@ -231,11 +230,7 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, res
     rewards_per_iter = []
 
     U = U_init.copy()
-    betas = jnp.linspace(args.beta0, args.betaT, 10)
-    alphas = 1.0 - betas
-    alphas_bar_local = jnp.cumprod(alphas)
-    sigmas_local = jnp.sqrt(1 - alphas_bar_local)
-    times_local = []
+    _, _, alphas_bar_local, sigmas_local = linear_beta_schedule(args.beta0, args.betaT, 10)
 
     for k in range(K):
         for t_start in range(0, H - L + 1, L // 2):
@@ -244,11 +239,8 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, res
             U_window = U[t_start:t_end]
             rng, rng_step = jax.random.split(rng)
 
-            @jax.jit
             def reverse_once_local(U_w, rng_w):
-                local_times = []
                 for j in reversed(range(1, 10)):
-                    t0 = time.perf_counter()
                     eps_u = jax.random.normal(rng_w, (args.Nsample, L, Nu))
                     sigma_local = sigmas_local[j]
                     Y0s = eps_u * sigma_local + U_w
@@ -269,23 +261,15 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us_fn, res
 
                     U_new = jnp.sqrt(alphas_bar_local[j - 1]) * U_opt
 
-                    t1 = time.perf_counter()
-                    local_times.append(t1 - t0)
-
-                times_local.extend(local_times)
                 return U_new, _
 
-            t0 = time.perf_counter()
             U_opt_local, _ = reverse_once_local(U_window, rng_step)
-            t1 = time.perf_counter()
-            times.append(t1 - t0)
 
             U = U.at[t_start:t_end, :].set(U_opt_local)
 
         t_k_end = time.time()
         iter_time = t_k_end - t_k_start
         iter_freq = 1.0 / iter_time if iter_time > 0 else 0.0
-        print(f"Mean time per local window = {np.mean(times) * 1000:.2f} ms")
 
         reset_env_jit(jax.random.PRNGKey(args.seed))
         rewss_eval, _, _ = rollout_us_fn(U)
@@ -329,9 +313,6 @@ def main():
         states.append(state.pipeline_state)
     x_init = jnp.stack(states, axis=0)
 
-    fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    ax.set_aspect("equal", adjustable="datalim")
-
     state = reset_env_jit(jax.random.PRNGKey(args.seed))
     states = []
     for t in range(U_init.shape[0]):
@@ -340,11 +321,11 @@ def main():
         states.append(state.pipeline_state)
 
     x_opt = jnp.stack(states, axis=0)
-    fig1, ax1 = plt.subplots(1, 1, figsize=(5, 5))
-    ax1.set_aspect("equal", adjustable="datalim")
 
     env.render(x_init, U=U_init, r_terms=r_terms, rewards=rewards, tag="global", out_dir=out_dir)
-    env.render(x_opt, U=U_opt, r_terms=r_terms_opt, rewards=rewards_opt, tag="local", out_dir=out_dir)
+    env.render(
+        x_opt, U=U_opt, r_terms=r_terms_opt, rewards=rewards_opt, tag="local", out_dir=out_dir
+    )
 
     # Animation
     animate_crane_pendulum(x_init, env.l, env.dt, tag="global", out_dir=out_dir)

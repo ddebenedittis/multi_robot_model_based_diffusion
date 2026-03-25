@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from flax import struct
 from jax import numpy as jnp
 
+from mrmbd.utils import rk4
+
 
 # Command-line arguments for multi-car experiments
 @dataclass
@@ -42,15 +44,6 @@ def car_dynamics(x, u):
             u[0] * jnp.pi,  # theta_dot
         ]
     )
-
-
-# Numerical integration using Runge-Kutta 4
-def rk4(dynamics, x, u, dt):
-    k1 = dynamics(x, u)
-    k2 = dynamics(x + dt / 2 * k1, u)
-    k3 = dynamics(x + dt / 2 * k2, u)
-    k4 = dynamics(x + dt * k3, u)
-    return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
 # Check for inter-robot collisions

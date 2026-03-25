@@ -15,6 +15,7 @@ from mrmbd.envs.multi_car import Args, check_collision_static, check_inter_robot
 from mrmbd.utils import (
     cosine_beta_schedule,
     create_experiment_dir,
+    linear_beta_schedule,
     make_lagrangian_fn,
     make_residual_fn,
     rollout_multi_us,
@@ -129,7 +130,9 @@ def plot_obstacle_layout(env, out_dir="results"):
     plt.savefig(os.path.join(out_dir, "obstacle_layout.pdf"), dpi=300)
 
 
-def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit, out_dir="results/multicar_iterative"):
+def run_diffusion_once(
+    args: Args, env, rollout_us, reset_env_jit, out_dir="results/multicar_iterative"
+):
     """
     First phase of D4ORM: initial global reverse diffusion
     inspired by Algorithm 1 (Model-Based Diffusion) from the D4ORM paper.
@@ -151,12 +154,13 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit, out_dir="resu
     # Diffusion noise schedule
     if args.cosine:
         betas = cosine_beta_schedule(args.Ndiffuse)
+        alphas = 1.0 - betas
+        alphas_bar = jnp.cumprod(alphas)
+        sigmas = jnp.sqrt(1 - alphas_bar)
     else:
-        betas = jnp.linspace(args.beta0, args.betaT, args.Ndiffuse)
-
-    alphas = 1.0 - betas
-    alphas_bar = jnp.cumprod(alphas)
-    sigmas = jnp.sqrt(1 - alphas_bar)
+        betas, alphas, alphas_bar, sigmas = linear_beta_schedule(
+            args.beta0, args.betaT, args.Ndiffuse
+        )
 
     #  Start from zero control
     YN = jnp.zeros([args.Hsample, n, Nu])
@@ -252,7 +256,14 @@ def run_diffusion_once(args: Args, env, rollout_us, reset_env_jit, out_dir="resu
 
 
 # Local iterative diffusion optimization
-def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_env_jit, out_dir="results/multicar_iterative"):
+def run_diffusion_local(
+    args: Args,
+    U_init: jnp.ndarray,
+    env,
+    rollout_us,
+    reset_env_jit,
+    out_dir="results/multicar_iterative",
+):
     """
     Second phase of D4ORM: local iterative reverse diffusion optimization.
     Based on Algorithm 2 (Iterative Denoising) from the D4ORM paper.
@@ -274,11 +285,7 @@ def run_diffusion_local(args: Args, U_init: jnp.ndarray, env, rollout_us, reset_
     K = 10  # number of local iterations
 
     # Local diffusion schedule
-    betas = jnp.linspace(args.beta0, args.betaT, 10)
-
-    alphas = 1.0 - betas
-    alphas_bar_local = jnp.cumprod(alphas)
-    sigmas_local = jnp.sqrt(1 - alphas_bar_local)
+    _, _, alphas_bar_local, sigmas_local = linear_beta_schedule(args.beta0, args.betaT, 10)
 
     lambda_goal = jnp.zeros(n * 3) if args.penalize_backward else jnp.zeros(n * 2)
 
@@ -472,7 +479,9 @@ def main():
 
     print("STEP 2: Iterative Local Optimization")
     t3 = time.time()
-    U_opt, rewards_per_iter = run_diffusion_local(args, U_init, env, rollout_us, reset_env_jit, out_dir=out_dir)
+    U_opt, rewards_per_iter = run_diffusion_local(
+        args, U_init, env, rollout_us, reset_env_jit, out_dir=out_dir
+    )
     t4 = time.time()
     print(f"Local optimization time: {t4 - t3:.3f} s")
 

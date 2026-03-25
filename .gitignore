@@ -11,4 +11,5 @@ venv/
 .vscode/
 .idea/
 
+benchmarks/
 results/

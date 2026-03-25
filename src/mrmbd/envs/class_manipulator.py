@@ -13,6 +13,7 @@ from flax import struct
 from matplotlib.animation import FuncAnimation
 
 from mrmbd.envs.manipulator import B_func_jax, C_func_jax, G_func_jax
+from mrmbd.utils import rk4
 
 matplotlib.use("Agg")
 
@@ -107,30 +108,11 @@ def angle_diff(q, qf):
     return jnp.arctan2(jnp.sin(q - qf), jnp.cos(q - qf))
 
 
-def rollout_single_us(step_env, state, us):
-    def step_fn(state, u_t):
-        state = step_env(state, u_t)
-        return state, (state.reward, state.pipeline_state, state.r_terms)
-
-    _, (rews, states, r_terms) = jax.lax.scan(step_fn, state, us)
-    states = jnp.vstack([state.pipeline_state[None], states])
-    rews = jnp.hstack([0.0, rews])
-    return rews, states, r_terms
-
-
 @struct.dataclass
 class State:
     pipeline_state: jnp.ndarray  # state: [q1,q2,q3,q4, dq1,dq2,dq3,dq4]
     reward: float
     r_terms: jnp.ndarray
-
-
-def rk4(dynamics, x, u, dt):
-    k1 = dynamics(x, u)
-    k2 = dynamics(x + dt / 2 * k1, u)
-    k3 = dynamics(x + dt / 2 * k2, u)
-    k4 = dynamics(x + dt * k3, u)
-    return x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
 @jax.jit
