@@ -155,7 +155,7 @@ def make_log_barrier_collision_cost(obs, n, Ra, epsilon=1e-6):
                 diffs = pos[idx_i] - pos[idx_j]
                 dists = jnp.linalg.norm(diffs, axis=1)
 
-                dist_safe = jnp.clip(dists - 2 * Ra, a_min=epsilon)
+                dist_safe = jnp.clip(dists - 2 * Ra, min=epsilon)
                 barrier = -jnp.log(dist_safe) if obs else jnp.maximum(-jnp.log(dist_safe), 0.0)
 
                 return jnp.mean(barrier)

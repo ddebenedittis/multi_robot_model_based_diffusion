@@ -1,60 +1,103 @@
 # Multi-Robot Model-Based Diffusion (mrmbd)
 
-This package extends the [Model-Based Diffusion](https://arxiv.org/abs/2305.12577) (MBD) framework to multi-robot systems.
+This package extends the [Model-Based Diffusion](https://arxiv.org/abs/2407.01573) (MBD) framework to multi-robot trajectory optimization. It builds on the [MBD codebase](mbd/README.md) (included as a submodule) and introduces two new algorithms:
 
-It implements:
-- **LID** (Local Iterative Diffusion): two-phase method with global reverse diffusion followed by local iterative refinement on sliding windows.
-- **LIDEC** (LID + Equality Constraints): extends LID with Augmented Lagrangian optimization for hard equality constraints.
+- **LID** (Local Iterative Diffusion): a two-phase method that first runs global reverse diffusion from noise to an initial trajectory, then refines it locally on overlapping sliding windows.
+- **LIDEC** (LID + Equality Constraints): extends LID with Augmented Lagrangian optimization for hard equality constraints (e.g., exact goal reaching).
 
-These are applied to three domains: multi-car (4 unicycles), RRPR manipulator (4-DOF arm), and crane pendulum (cart + pendulum swing-up).
+## Domains
+
+| Domain | Environment | Planner | Description |
+|--------|-------------|---------|-------------|
+| Multi-Car | `MultiCar2d` | `lid_multicar.py` | 4 unicycle robots with inter-robot collision avoidance, static obstacles, and formation tasks |
+| RRPR Manipulator | `RRPRSingleEnv` | `lid_rrpr.py` | 4-DOF revolute-revolute-prismatic-revolute arm for end-effector trajectory tracking |
+| Crane Pendulum | `CranePendulumEnv` | `lid_crane.py` | Overhead crane (cart on rail + suspended pendulum) swing-up control |
 
 ## Installation
 
 Clone the repository with submodules:
-
-```shell
-# Install MBD from the submodule (for running original experiments)
-pip install -e ./mbd
-
-# Install mrmbd
-pip install -e .
+```bash
+git clone --recurse-submodules <repo-url>
+cd mrmbd
 ```
 
-## Reproducing Results
+This project uses [uv](https://docs.astral.sh/uv/):
+```bash
+uv sync --extra cuda12
+uv pip install -e ./mbd
+source .venv/bin/activate
+```
 
-### Multi-Car: LID (two-phase, no constraints)
-```shell
+For CUDA support, use `uv sync --extra cuda12` instead.
+
+## Usage
+
+### Multi-Car
+
+```bash
 python -m mrmbd.planners.lid_multicar --n_robots 4 [--ECD] [--obstacles_enabled] [--formation_shift] [--penalize_backward] [--cosine] [--filter]
 ```
-Where:
-- `--ECD`: enable equality constraints (LIDEC variant)
-- `--obstacles_enabled`: add static obstacles to the environment
-- `--formation_shift`: perform a formation shift task instead of point-to-point
-- `--penalize_backward`: add a penalty for backward motion in the cost function
-- `--cosine`: use a cosine noise schedule instead of linear
-- `--filter`: apply a Butterworth filter to the noise samples
+
+| Flag | Description |
+|------|-------------|
+| `--ECD` | Enable equality constraints (LIDEC variant) |
+| `--obstacles_enabled` | Add static obstacles |
+| `--formation_shift` | Formation shift task instead of point-to-point |
+| `--penalize_backward` | Penalize backward motion in the cost function |
+| `--cosine` | Cosine noise schedule (default: linear) |
+| `--filter` | Butterworth low-pass filter on noise samples |
 
 ### RRPR Manipulator
-```shell
+
+```bash
 python -m mrmbd.planners.lid_rrpr
 ```
 
 ### Crane Pendulum
-```shell
+
+```bash
 python -m mrmbd.planners.lid_crane
 ```
 
-### Visualization / Post-processing
-```shell
+### Visualization
+
+```bash
 python -m mrmbd.scripts.graphic           # multi-car analysis plots
-python -m mrmbd.scripts.graphic_crane     # crane diffusion animation
-python -m mrmbd.scripts.graphic_man       # RRPR 3D EE trajectory animation
+python -m mrmbd.scripts.graphic_crane     # crane pendulum animation
+python -m mrmbd.scripts.graphic_man       # RRPR 3D end-effector animation
 python -m mrmbd.scripts.cosine            # noise schedule comparison plots
 ```
 
+### Benchmarking (base MBD environments)
+
+```bash
+python scripts/benchmark.py               # benchmark MBD + path integral planners
+python scripts/sweep_pid.py               # PID gain sweep for MBD tuning
+python scripts/sweep_underdamped.py        # underdamped parameter sweep
+```
+
+Results are saved to timestamped subdirectories under `benchmarks/`.
+
+## Project Structure
+
+```
+mrmbd/
+├── src/mrmbd/              # Main package
+│   ├── envs/               # Environment dynamics & kinematics
+│   ├── planners/           # LID/LIDEC planning algorithms
+│   ├── scripts/            # Visualization & inference entry points
+│   ├── utils.py            # Cost functions, Augmented Lagrangian, noise schedules
+│   └── butterworth.py      # Low-pass noise filtering
+├── scripts/                # Benchmarking & parameter sweep scripts
+├── mbd/                    # MBD submodule (LeCAR-Lab/model-based-diffusion)
+├── results/                # Experiment outputs (timestamped)
+└── benchmarks/             # Benchmark results (timestamped)
+```
+
 ## Development
-Install pre-commit hooks
-```shell
+
+Install pre-commit hooks:
+```bash
 sudo apt install pre-commit  # if not already installed
 pre-commit install
 ```

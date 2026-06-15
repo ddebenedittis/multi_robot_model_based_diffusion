@@ -13,12 +13,15 @@ from mrmbd.butterworth import butterworth_filter_numpy, get_butterworth_coeffs
 from mrmbd.envs import MultiCar2d
 from mrmbd.envs.multi_car import Args, check_collision_static, check_inter_robot_collisions
 from mrmbd.utils import (
+    ROBOT_PALETTE,
     cosine_beta_schedule,
     create_experiment_dir,
     linear_beta_schedule,
     make_lagrangian_fn,
     make_residual_fn,
+    plot_diffusion_cloud,
     rollout_multi_us,
+    save_animation,
 )
 
 
@@ -50,84 +53,6 @@ def plot_all_robot_actions(U_opt, dt=0.1, path="results/multicar_iterative"):
     plt.savefig(filename)
     plt.close()
     print(f"Saved {filename}")
-
-
-def plot_obstacle_layout(env, out_dir="results"):
-    """
-    Visualize only the initial robot positions and static obstacles,
-    with clean academic style suitable for thesis figures.
-    """
-    plt.rcParams.update(
-        {
-            "font.family": "serif",
-            "font.serif": ["CMU Serif", "DejaVu Serif", "Times"],
-            "font.size": 10,
-            "axes.titlesize": 11,
-            "axes.labelsize": 10,
-            "legend.fontsize": 9,
-            "axes.linewidth": 0.8,
-            "xtick.direction": "in",
-            "ytick.direction": "in",
-            "xtick.major.size": 3,
-            "ytick.major.size": 3,
-        }
-    )
-
-    fig, ax = plt.subplots(figsize=(4.2, 4.2))
-    ax.set_aspect("equal")
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("y [m]")
-    ax.set_title("Environment with static obstacles", pad=6)
-
-    # === Static obstacles ===
-    for x_c, y_c, w, h in env.static_obstacles:
-        rect = plt.Rectangle(
-            (x_c - w / 2, y_c - h / 2),
-            w,
-            h,
-            linewidth=1.0,
-            edgecolor="black",
-            facecolor="#d3d3d3",
-            alpha=0.8,
-            zorder=1,
-        )
-        ax.add_patch(rect)
-
-    # === Initial robot positions ===
-    for i, (x, y, _) in enumerate(env.x0):
-        ax.plot(
-            x,
-            y,
-            "o",
-            color=f"C{i}",
-            markersize=6,
-            markeredgecolor="k",
-            markeredgewidth=0.6,
-            zorder=3,
-        )
-        ax.text(x, y - 0.10, f"R{i}", ha="center", va="top", fontsize=8)
-
-    # === Goal positions ===
-    for i, (xg, yg, _) in enumerate(env.xg):
-        ax.plot(
-            xg,
-            yg,
-            "s",
-            color=f"C{i}",
-            markersize=5,
-            markeredgecolor="k",
-            markeredgewidth=0.6,
-            zorder=3,
-        )
-
-    # === Dashed grid ===
-    ax.grid(True, linestyle="-", color="k", linewidth=0.6, alpha=0.7)
-
-    # === Legend ===
-    ax.legend(["Obstacles"], loc="upper right", frameon=False)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "obstacle_layout.pdf"), dpi=300)
 
 
 def run_diffusion_once(
@@ -452,6 +377,12 @@ def run_diffusion_local(
 def main():
     args = tyro.cli(Args)
 
+    # Plotting the diffusion cloud needs the per-step sample data, which is only
+    # dumped to global_Yi_list.npz when save_video is on.
+    if args.plot_cloud and not args.save_video:
+        print("--plot_cloud requires the diffusion-cloud data; enabling --save_video.")
+        args.save_video = True
+
     variant_tags = ["LIDEC"] if args.ECD else ["LID"]
     if args.formation_shift:
         variant_tags.append("form")
@@ -476,6 +407,10 @@ def main():
     U_init = run_diffusion_once(args, env, rollout_us, reset_env_jit, out_dir=out_dir)
     t2 = time.time()
     print(f"Initial reverse diffusion time: {t2 - t1:.3f} s")
+
+    if args.plot_cloud:
+        print("Rendering diffusion cloud...")
+        plot_diffusion_cloud(out_dir, env, save_video=not args.not_render)
 
     print("STEP 2: Iterative Local Optimization")
     t3 = time.time()
@@ -692,7 +627,7 @@ def main():
             xs_np = jnp.array(xs)
 
         n, T, _ = xs_np.shape
-        cmap = plt.get_cmap("tab20", n)
+        colors = ROBOT_PALETTE
         actions = jnp.transpose(U_opt, (1, 0, 2))  # (n, T, Nu)
 
         fig, ax = plt.subplots(figsize=(5, 5))
@@ -739,13 +674,24 @@ def main():
         points = []
 
         for i in range(n):
-            color = cmap(i)
+            color = colors[i % len(colors)]
             (line,) = ax.plot([], [], lw=2, color=color, zorder=1)
             lines.append(line)
 
+            # Start position (o) and goal position (x)
+            ax.plot(
+                xs_np[i, 0, 0],
+                xs_np[i, 0, 1],
+                "o",
+                color=color,
+                markersize=6,
+                markerfacecolor="white",
+                markeredgewidth=1.0,
+                zorder=4,
+            )
             if goals is not None:
                 gx, gy = goals[i, 0], goals[i, 1]
-                ax.plot(gx, gy, "s", color=color, markersize=6, markeredgewidth=2)
+                ax.plot(gx, gy, "x", color=color, markersize=7, markeredgewidth=2, zorder=5)
 
         orientation_arrows = []
         robot_circles = []
@@ -771,7 +717,7 @@ def main():
                 circle = plt.Circle(
                     (x_curr, y_curr),
                     0.1,
-                    color=cmap(i),
+                    color=colors[i % len(colors)],
                     fill=False,
                     linestyle="-",
                     linewidth=1,
@@ -816,7 +762,7 @@ def main():
                 linewidth=0,
                 facecolor="yellow",
                 alpha=0.1,
-                zorder=1,
+                zorder=0,
             )
             ax.add_patch(rect_outer)
 
@@ -828,7 +774,7 @@ def main():
                 linewidth=0,
                 facecolor="yellow",
                 alpha=0.5,
-                zorder=2,
+                zorder=0,
             )
             ax.add_patch(rect_inner)
 
@@ -838,18 +784,18 @@ def main():
                 w,
                 h,
                 linewidth=1,
-                edgecolor="red",
-                facecolor="red",
+                edgecolor="black",
+                facecolor="black",
                 zorder=3,
             )
             ax.add_patch(rect_real)
 
         ax.legend(points, labels, loc="upper right")
 
-        plot_obstacle_layout(env, out_dir=path)
-
         video_path = os.path.join(path, f"local_diffusion_{ecd_tag}_{formation_tag}.mp4")
-        ani.save(video_path, fps=10, dpi=150)
+        # Keep the video LaTeX-free (the static plots use the LaTeX style via set_plot_style).
+        plt.rcParams["text.usetex"] = False
+        save_animation(ani, video_path, fps=10)
         print("Video saved in:", video_path)
 
 

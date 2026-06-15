@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from flax import struct
 from jax import numpy as jnp
 
-from mrmbd.utils import rk4
+from mrmbd.utils import ROBOT_PALETTE, gen_arrow_head_marker, rk4, set_plot_style
 
 
 # Command-line arguments for multi-car experiments
@@ -30,6 +30,7 @@ class Args:
     formation_shift: bool = False
     T: int = 30
     save_video: bool = False
+    plot_cloud: bool = False  # render the diffusion-cloud images/video at the end of planning
     cosine: bool = False
     obstacles_enabled: bool = False
     penalize_backward: bool = False
@@ -279,59 +280,38 @@ class MultiCar2d:
         n = X.shape[0]
 
         if style == "flow":
-            plt.rcParams.update(
-                {
-                    "font.family": "serif",
-                    "font.serif": ["CMU Serif", "DejaVu Serif", "Times"],
-                    "font.size": 10,
-                    "axes.titlesize": 11,
-                    "axes.labelsize": 10,
-                    "legend.fontsize": 9,
-                    "axes.linewidth": 0.8,
-                    "xtick.direction": "in",
-                    "ytick.direction": "in",
-                    "xtick.major.size": 3,
-                    "ytick.major.size": 3,
-                }
-            )
+            set_plot_style()
 
-        palette = [
-            "#1f77b4",
-            "#ff7f0e",
-            "#2ca02c",
-            "#d62728",
-            "#9467bd",
-            "#8c564b",
-            "#e377c2",
-            "#7f7f7f",
-        ]
+        palette = ROBOT_PALETTE
         colors = palette[:n]
 
         for i in range(n):
             traj = jnp.array(X[i])
             color = colors[i % len(colors)]
 
-            ax.plot(traj[:, 0], traj[:, 1], color=color, linewidth=1.3, alpha=0.8, zorder=2)
+            ax.plot(
+                traj[:, 0],
+                traj[:, 1],
+                color=color,
+                linewidth=1.3,
+                alpha=0.8,
+                zorder=2,
+                label=f"Robot {i}",
+            )
 
-            # Directional arrows
+            # Directional triangle markers (oriented unicycle bodies)
             step = max(2, len(traj) // 30)
             for t in range(0, len(traj) - 1, step):
                 x, y, theta = traj[t, 0], traj[t, 1], traj[t, 2]
-                dx = 0.1 * jnp.cos(theta)
-                dy = 0.1 * jnp.sin(theta)
-                ax.arrow(
+                deg = float(theta) * 180.0 / jnp.pi
+                marker, scale = gen_arrow_head_marker(deg)
+                ax.scatter(
                     x,
                     y,
-                    dx,
-                    dy,
-                    head_width=0.05,
-                    head_length=0.06,
-                    fc=color,
-                    ec=color,
-                    lw=0.8,
+                    s=60 * scale**2,
+                    c=color,
+                    marker=marker,
                     alpha=0.7,
-                    overhang=0.5,
-                    length_includes_head=True,
                     zorder=3,
                 )
 
@@ -346,19 +326,18 @@ class MultiCar2d:
                 markeredgewidth=0.9,
                 zorder=4,
             )
-            ax.grid(True, linestyle="-", color="k", linewidth=0.6, alpha=0.7)
 
-        # Goal markers
+        # Goal markers (x)
         if goals is not None:
             for i in range(n):
                 gx, gy = goals[i, 0], goals[i, 1]
                 ax.plot(
                     gx,
                     gy,
-                    marker="s",
+                    marker="x",
                     color=palette[i],
-                    markersize=5.5,
-                    markeredgewidth=0.8,
+                    markersize=7,
+                    markeredgewidth=1.5,
                     zorder=5,
                 )
 
@@ -370,12 +349,12 @@ class MultiCar2d:
                 h,
                 linewidth=1.0,
                 edgecolor="black",
-                facecolor="#d3d3d3",
+                facecolor="black",
                 zorder=1,
             )
             ax.add_patch(rect)
 
-        # Penalty zones around obstacles
+        # Penalty zones around obstacles (yellow)
         buffer_min = 0.2
         buffer_max = 0.5
         for x_c, y_c, w, h in self.static_obstacles:
@@ -385,9 +364,9 @@ class MultiCar2d:
                 h + 2 * buffer_max,
                 linewidth=0.8,
                 edgecolor="none",
-                facecolor="#a6bddb",
-                alpha=0.25,
-                zorder=1,
+                facecolor="yellow",
+                alpha=0.15,
+                zorder=0,
             )
             ax.add_patch(rect_outer)
             rect_inner = plt.Rectangle(
@@ -396,9 +375,9 @@ class MultiCar2d:
                 h + 2 * buffer_min,
                 linewidth=0.8,
                 edgecolor="none",
-                facecolor="#3690c0",
-                alpha=0.35,
-                zorder=2,
+                facecolor="yellow",
+                alpha=0.45,
+                zorder=0,
             )
             ax.add_patch(rect_inner)
 
@@ -421,17 +400,7 @@ class MultiCar2d:
         ax.set_xlabel("x [m]")
         ax.set_ylabel("y [m]")
         ax.set_title("Optimized trajectories", pad=8)
+        ax.grid(True, linestyle="-.", alpha=0.5)
 
-        ax.legend(
-            [plt.Line2D([], [], color=colors[i], lw=1.3) for i in range(n)],
-            [f"R{i}" for i in range(n)],
-            loc="upper right",
-            frameon=False,
-            handlelength=1.5,
-            handletextpad=0.6,
-            borderpad=0.2,
-            labelspacing=0.3,
-            title="Robot",
-            title_fontsize=9,
-        )
+        ax.legend(loc="upper right")
         ax.margins(0.1)

@@ -9,7 +9,7 @@ from jax import numpy as jnp
 
 from mrmbd.envs import MultiCar2d
 from mrmbd.envs.multi_car import Args
-from mrmbd.utils import rollout_multi_us
+from mrmbd.utils import rollout_multi_us, save_animation
 
 
 def run_diffusion_once(args: Args):
@@ -216,7 +216,7 @@ def main():
         ani = animation.FuncAnimation(
             fig, update, frames=len(trajectory_buffer), init_func=init, blit=False
         )
-        ani.save(os.path.join(path, "local_diffusion_video.mp4"), fps=10, dpi=150)
+        save_animation(ani, os.path.join(path, "local_diffusion_video.mp4"), fps=10)
         print("Saved: local_diffusion_video.mp4")
 
 

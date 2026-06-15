@@ -8,6 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from mrmbd.envs.class_manipulator import RRPRSingleEnv, forward_kinematics_rrpr_jax
+from mrmbd.utils import save_animation
 
 # Setup manipulator
 env = RRPRSingleEnv()
@@ -61,5 +62,5 @@ def update(frame):
 
 
 ani = FuncAnimation(fig, update, frames=Nsteps, interval=300, blit=False)
-ani.save("results/latest-rrpr/rrpr_all_ee_trajs.mp4", fps=3)
+save_animation(ani, "results/latest-rrpr/rrpr_all_ee_trajs.mp4", fps=3)
 print("Video saved: results/latest-rrpr/rrpr_all_ee_trajs.mp4")

@@ -12,7 +12,12 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Rectangle
 
 from mrmbd.envs.class_overhead_crane import Args, CranePendulumEnv
-from mrmbd.utils import create_experiment_dir, linear_beta_schedule, rollout_single_us
+from mrmbd.utils import (
+    create_experiment_dir,
+    linear_beta_schedule,
+    rollout_single_us,
+    save_animation,
+)
 
 
 def animate_crane_pendulum(
@@ -159,7 +164,7 @@ def animate_crane_pendulum(
     # Save video
     os.makedirs(out_dir, exist_ok=True)
     video_path = os.path.join(out_dir, f"overhead_crane_{tag}.mp4")
-    ani.save(video_path, fps=fps_save, dpi=200)
+    save_animation(ani, video_path, fps=fps_save)
 
     if show:
         plt.show()

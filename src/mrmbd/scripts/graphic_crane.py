@@ -9,6 +9,8 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
+from mrmbd.utils import save_animation
+
 # Parameters
 l = 1
 dt = 0.01
@@ -60,5 +62,5 @@ ani = FuncAnimation(fig, update, frames=Nsteps, init_func=init, interval=300, bl
 out_dir = "results/latest-crane"
 os.makedirs(out_dir, exist_ok=True)
 video_path = os.path.join(out_dir, "pendulum_diffusion_steps.mp4")
-ani.save(video_path, fps=3)
+save_animation(ani, video_path, fps=3)
 print(f"Video saved: {video_path}")

@@ -11,6 +11,7 @@ from tqdm import tqdm
 import mrmbd
 from mrmbd.envs import MultiCar2d
 from mrmbd.envs.multi_car import Args
+from mrmbd.utils import save_animation
 
 
 def run_diffusion(args: Args):
@@ -140,7 +141,7 @@ def run_diffusion(args: Args):
         ani = animation.FuncAnimation(
             fig, update, frames=len(trajectory_buffer), init_func=init, blit=False
         )
-        ani.save(os.path.join(path, "diffusion_video.mp4"), fps=10, dpi=150)
+        save_animation(ani, os.path.join(path, "diffusion_video.mp4"), fps=10)
         print("Saved: diffusion_video.mp4")
 
     final = Yi[-1]

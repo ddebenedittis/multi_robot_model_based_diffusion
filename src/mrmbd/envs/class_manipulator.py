@@ -13,7 +13,7 @@ from flax import struct
 from matplotlib.animation import FuncAnimation
 
 from mrmbd.envs.manipulator import B_func_jax, C_func_jax, G_func_jax
-from mrmbd.utils import rk4
+from mrmbd.utils import rk4, save_animation
 
 matplotlib.use("Agg")
 
@@ -414,5 +414,5 @@ class RRPRSingleEnv:
             return robot_line, trail_line, goal_point, title3d
 
         ani = FuncAnimation(fig, update, frames=T, interval=50)
-        ani.save(f"{out_dir}/motion_3D_{tag}.mp4", writer="ffmpeg", fps=20)
+        save_animation(ani, f"{out_dir}/motion_3D_{tag}.mp4", fps=20)
         plt.close(fig)
